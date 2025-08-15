@@ -43,7 +43,7 @@ ollama serve
 
 2) Launch MatOllama and list models:
 ```bash
-./matollama.py
+./MatOllama.py
 list # happens by default
 ```
 
