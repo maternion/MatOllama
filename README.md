@@ -119,15 +119,6 @@ load session_20250101_120000.json
 - Temperature: `temp [0.0–2.0]`
 - System prompt: `system "You are a helpful assistant."`
 
-## 🧭 Versioning
-- Semantic Versioning (SemVer): MAJOR.MINOR.PATCH
-- Current CLI: 1.0.4
-  - Fixes:
-    - Variable name error in main loop
-    - Improved “Starting…” message handling
-    - Removed redundant “select” command
-    - Stability improvements
-
 ## 🆘 Troubleshooting
 - “Cannot connect to Ollama”
   - Ensure `ollama serve` is running and `--host` is correct.
