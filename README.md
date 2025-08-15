@@ -1,9 +1,9 @@
-# MatOllama — Fast, clean terminal workflows for local LLMs
+Here’s your README with tasteful emojis added to section titles and a few inline touches to keep it lively but still clean.
 
+# ⚡ MatOllama — Fast, clean terminal workflows for local LLMs
 MatOllama is a polished command-line interface for running and managing local LLMs via Ollama. It emphasizes speed, clarity, and ergonomics, with adaptive layouts, responsive streaming chat, and safe controls suited for daily use.
 
-## Features
-
+## ✨ Features
 - Clean terminal UX with rich panels, tables, and spinners
 - Streamlined model ops: list, pull, run, show, copy, create, push, remove
 - Adaptive table width based on terminal size and model names
@@ -14,8 +14,7 @@ MatOllama is a polished command-line interface for running and managing local LL
 - Verbose mode (-v/--verbose) for debug fields from the API
 - Version panel shows both CLI and Ollama versions
 
-## Install
-
+## 📦 Install
 - Requirements:
   - Python 3.9+
   - Ollama running locally (default: http://localhost:11434)
@@ -25,17 +24,16 @@ Clone and run directly:
 ```bash
 git clone 
 cd 
-python3 matollama.py
+python3 MatOllama.py
 ```
 
 (Optional) Make executable:
 ```bash
-chmod +x matollama.py
-./matollama.py
+chmod +x MatOllama.py
+./MatOllama.py
 ```
 
-## Quick start
-
+## 🚀 Quick start
 1) Start Ollama:
 ```bash
 ollama serve
@@ -63,8 +61,7 @@ run 2
 - After `run`, type messages; use `exit` to leave chat mode.
 - Use `stop` to halt generation, `unload` to free the model.
 
-## CLI commands
-
+## 🧰 CLI commands
 - list — List available models with index, name, digest, size, modified
 - pull  — Download a model from registry
 - run  ["prompt"] [--verbose|-v] — Start chat or one‑shot prompt
@@ -86,8 +83,7 @@ run 2
 - help — Show help
 - exit | quit — Exit (prompt to save if history exists)
 
-## Examples
-
+## 🧪 Examples
 - Run by index with immediate prompt:
 ```bash
 run 2 "Write a haiku about monsoons."
@@ -110,23 +106,20 @@ save
 load session_20250101_120000.json
 ```
 
-## UX details
-
+## 🎛️ UX details
 - Adaptive width: Calculates optimal table width for model list based on terminal size and longest model name.
 - Humanized info: Shows MB/GB sizes and readable timestamps.
 - Progress feedback: Detailed status for pull/create/push (manifest, download, verify, cleanup).
-- Thinking models: Streams internal  content dimmed, then reveals the final answer clearly.
+- Thinking models: Streams internal content dimmed, then reveals the final answer clearly.
 - Signal handling: Ctrl+C gracefully stops active generation; otherwise hints to use `exit`.
 
-## Configuration
-
+## ⚙️ Configuration
 - Host: `--host` (default http://localhost:11434)
 - Timeout: `--timeout` in seconds (default 300)
 - Temperature: `temp [0.0–2.0]`
 - System prompt: `system "You are a helpful assistant."`
 
-## Versioning
-
+## 🧭 Versioning
 - Semantic Versioning (SemVer): MAJOR.MINOR.PATCH
 - Current CLI: 1.0.4
   - Fixes:
@@ -135,17 +128,15 @@ load session_20250101_120000.json
     - Removed redundant “select” command
     - Stability improvements
 
-## Troubleshooting
-
+## 🆘 Troubleshooting
 - “Cannot connect to Ollama”
   - Ensure `ollama serve` is running and `--host` is correct.
 - “Model not found locally”
-  - Use `pull ` or accept prompt to pull when running by name.
+  - Use `pull` or accept prompt to pull when running by name.
 - Terminal layout issues
   - Resize the terminal; the table width recalculates dynamically.
 - Stuck generation
   - Use `stop` or Ctrl+C; then `unload` if needed.
 
-## Acknowledgements
-
+## 🙏 Acknowledgements
 Built for smooth local LLM workflows with Ollama, using requests and rich for a clean terminal experience.
