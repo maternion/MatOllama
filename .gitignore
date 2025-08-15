@@ -1,0 +1,45 @@
+# .gitignore for MatOllama (Python CLI)
+
+# Byte-compiled / cache
+__pycache__/
+*.py[cod]
+*.pyc
+*.pyo
+*.pyd
+.pytest_cache/
+*.cover
+
+# Virtual environments
+.env
+.venv
+venv/
+ENV/
+env/
+
+# Packaging / build artifacts
+build/
+dist/
+*.egg-info/
+*.egg
+.eggs/
+
+# Logs and temp files
+*.log
+*.tmp
+*.bak
+*.swp
+
+# IDE/editor settings
+.vscode/
+.idea/
+*.code-workspace
+
+# OS-generated files
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# Local CLI artifacts (safety; default path is ~/.ollama_cli)
+.ollama_cli/
+.ollama_history
+*.json
