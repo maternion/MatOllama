@@ -1,5 +1,3 @@
-Here’s your README with tasteful emojis added to section titles and a few inline touches to keep it lively but still clean.
-
 # ⚡ MatOllama — Fast, clean terminal workflows for local LLMs
 MatOllama is a polished command-line interface for running and managing local LLMs via Ollama. It emphasizes speed, clarity, and ergonomics, with adaptive layouts, responsive streaming chat, and safe controls suited for daily use.
 
