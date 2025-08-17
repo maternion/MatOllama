@@ -161,7 +161,7 @@ MatOllama is a polished command-line interface (CLI) for running and managing lo
 - **Stuck Generation**:
   - Use `stop` or Ctrl+C, then `unload` if needed.
 
---
+---
 
 ## 🙏 Acknowledgements
 
