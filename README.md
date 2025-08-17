@@ -13,11 +13,11 @@ MatOllama is a polished command-line interface for running and managing local LL
 - Version panel shows both CLI and Ollama versions
 
 ## 📦 Install
-- Requirements:
-  - Python 3.9+
-  - Install Ollama - https://ollama.com/download
-  - Ollama running locally (default: http://localhost:11434)
-  - Python packages: requests, rich
+Requirements:
+- Python 3.9+
+- Install Ollama - https://ollama.com/download
+- Ollama running locally (default: http://localhost:11434)
+- Python packages: requests, rich
 
 Clone and run directly:
 ```bash
