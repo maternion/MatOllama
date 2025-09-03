@@ -39,6 +39,8 @@ class ChatMsg:
     content: str
     ts: datetime = field(default_factory=datetime.now)
 
+
+
 class OllamaClient:
     def __init__(self, host: str = "http://localhost:11434", timeout: float = 300.0):
         self.host = host.rstrip("/")
@@ -256,7 +258,7 @@ class OllamaClient:
 
     def unload_model(self, model_name: str) -> bool:
         try:
-            self._request("POST", "/api/generate", json={
+            self._request("POST", "/api/generate", json= {
                 "model": model_name,
                 "keep_alive": 0
             })
@@ -301,7 +303,7 @@ class OllamaClient:
                     # Show any extra debug keys in yellow (skip message/done)
                     for k, v in data.items():
                         if k not in ("message", "done", "error") and v and v != {} and v != []:
-                            yield f"\n[DEBUG {k}]: {json.dumps(v, ensure_ascii=False)}\n"
+                            yield f"[DEBUG {k}]: {json.dumps(v, ensure_ascii=False)}"
 
                 if data.get("done"):
                     break
@@ -390,6 +392,8 @@ class CLI:
         self.streaming = False
         self.loading = False
         self.verbose = False
+        self.first_prompt = True
+        self.thinking = True
         
         signal.signal(signal.SIGINT, self._signal_handler)
         self._check_connection()
@@ -443,6 +447,50 @@ class CLI:
         except Exception:
             return ""
 
+    def _handle_slash_commands(self, user_input: str) -> bool:
+        if not user_input.startswith("/"):
+            return False
+
+        parts = user_input.split()
+        command = parts[0].lower()
+        args = parts[1:]
+
+        if command == "/set":
+            if not args:
+                console.print("Usage: /set <option> <value>")
+                return True
+            
+            option = args[0].lower()
+            value = args[1].lower() if len(args) > 1 else None
+
+            if option == "verbose":
+                if value == "true":
+                    self.verbose = True
+                    console.print("[dim]Verbose mode enabled[/dim]")
+                elif value == "false":
+                    self.verbose = False
+                    console.print("[dim]Verbose mode disabled[/dim]")
+                else:
+                    console.print("Usage: /set verbose <true|false>")
+            elif option == "think":
+                if value == "true":
+                    self.thinking = True
+                    console.print("[dim]Thinking mode enabled[/dim]")
+                elif value == "false":
+                    self.thinking = False
+                    console.print("[dim]Thinking mode disabled[/dim]")
+                else:
+                    console.print("Usage: /set think <true|false>")
+            else:
+                console.print(f"Unknown option: {option}")
+
+        elif command == "/help":
+            self.cmd_help()
+        else:
+            console.print(f"Unknown command: {command}")
+        
+        return True
+
     def _format_size(self, size_bytes: int) -> str:
         if size_bytes == 0:
             return "0 B"
@@ -451,6 +499,11 @@ class CLI:
                 return f"{size_bytes:.1f} {unit}"
             size_bytes /= 1024
         return f"{size_bytes:.1f} PB"
+
+    def _parse_message(self, user_input: str) -> tuple[str, bool]:
+        return user_input, False
+
+    
 
     def _get_terminal_width(self) -> int:
         """Get current terminal width using multiple methods for reliability"""
@@ -549,7 +602,7 @@ class CLI:
         return False, width
 
     def cmd_list(self, interactive=False):
-        self.cmd_list_boxwidth(None, interactive=interactive)
+        _, width = self.cmd_list_boxwidth(None, interactive=interactive)
         return interactive
 
     def cmd_pull(self, model_name: str):
@@ -761,9 +814,8 @@ class CLI:
             console.print(f"[red]Failed to push {selected_model}[/red]")
 
     def cmd_ps(self):
-        """Show currently running models"""
+        """Show detailed running models info like official ollama ps"""
         try:
-            # Get running models from Ollama
             response = self.api._request("GET", "/api/ps")
             data = response.json()
             running_models = data.get("models", [])
@@ -772,28 +824,105 @@ class CLI:
                 console.print("[dim]No models currently running[/dim]")
                 return
             
+            # Collect all possible field names from all models
+            all_fields = set()
+            for model in running_models:
+                all_fields.update(model.keys())
+            
+            # Define preferred column order (matching ollama ps output)
+            preferred_order = [
+                "name", "id", "digest", "size", "processor", "until", 
+                "expires_at", "size_vram", "memory", "usage", "uptime", 
+                "created_at", "port", "pid"
+            ]
+            
+            # Build final column list with preferred ordering
+            columns = []
+            for field in preferred_order:
+                if field in all_fields:
+                    columns.append(field)
+            
+            # Add any remaining fields not in preferred order
+            remaining_fields = sorted(all_fields - set(preferred_order))
+            columns.extend(remaining_fields)
+            
+            # Create table
             optimal_width = self._calculate_optimal_width()
             table = Table(title="Running Models", box=box.ROUNDED, border_style="green", width=optimal_width)
             
-            table.add_column("Name", style="green")
-            table.add_column("Size", width=10, max_width=10)
-            table.add_column("Until", width=20, max_width=20)
-            
-            for model in running_models:
-                name = model.get("name", "Unknown")
-                size = self._format_size(model.get("size", 0))
-                expires_at = model.get("expires_at", "")
-                
-                if expires_at:
-                    try:
-                        dt = datetime.fromisoformat(expires_at.replace("Z", "+00:00"))
-                        expires_at = dt.strftime("%Y-%m-%d %H:%M:%S")
-                    except:
-                        expires_at = expires_at[:20] if expires_at else "Unknown"
+            # Add columns with proper headers
+            for col in columns:
+                header = col.replace("_", " ").title()
+                if col in ["name"]:
+                    table.add_column(header, style="green")
+                elif col in ["id", "digest"]:
+                    table.add_column(header, width=12, max_width=12)
+                elif col in ["size", "memory", "size_vram"]:
+                    table.add_column(header, width=10, max_width=10)
+                elif col in ["until", "expires_at", "created_at"]:
+                    table.add_column(header, width=20, max_width=20)
+                elif col in ["processor"]:
+                    table.add_column(header, width=12, max_width=12)
                 else:
-                    expires_at = "Unknown"
+                    table.add_column(header)
+            
+            # Add rows
+            for model in running_models:
+                row = []
+                for col in columns:
+                    value = model.get(col, "-")
+                    
+                    # Format specific field types
+                    if col in ["size", "memory", "size_vram"] and isinstance(value, int):
+                        value = self._format_size(value)
+                    elif col in ["until", "expires_at", "created_at"] and isinstance(value, str) and value != "-":
+                        try:
+                            # Handle ISO datetime format
+                            dt = datetime.fromisoformat(value.replace("Z", "+00:00"))
+                            if col == "until":
+                                # Show relative time for "until" field
+                                now = datetime.now(dt.tzinfo)
+                                diff = dt - now
+                                if diff.total_seconds() > 0:
+                                    minutes = int(diff.total_seconds() / 60)
+                                    if minutes < 60:
+                                        value = f"{minutes} minutes from now"
+                                    else:
+                                        hours = minutes // 60
+                                        value = f"{hours} hours from now"
+                                else:
+                                    value = "expired"
+                            else:
+                                value = dt.strftime("%Y-%m-%d %H:%M:%S")
+                        except:
+                            # Keep original value if parsing fails
+                            pass
+                    elif col == "uptime" and isinstance(value, int):
+                        # Convert uptime seconds to human readable
+                        seconds = value
+                        hours = seconds // 3600
+                        minutes = (seconds % 3600) // 60
+                        secs = seconds % 60
+                        if hours > 0:
+                            value = f"{hours}h {minutes}m"
+                        elif minutes > 0:
+                            value = f"{minutes}m {secs}s"
+                        else:
+                            value = f"{secs}s"
+                    elif col == "processor" and isinstance(value, str):
+                        # Format processor info (e.g., "100% GPU" or "CPU")
+                        value = value.upper() if value != "-" else "-"
+                    elif col in ["id", "digest"] and isinstance(value, str) and len(value) > 12:
+                        # Truncate long IDs/digests
+                        value = value[:12]
+                    elif col == "usage" and isinstance(value, (int, float)):
+                        value = f"{value:.1f}%"
+                    elif value is None:
+                        value = "-"
+                    
+                    row.append(str(value))
                 
-                table.add_row(name, size, expires_at)
+                table.add_row(*row)
             
             console.print(table)
             
@@ -809,14 +938,20 @@ class CLI:
         ollama_version = ollama_version_info.get('version', 'Unknown')
         
         # Create version display
-        version_content = f"""[bold cyan]CLI Version:[/bold cyan] {CLI_VERSION}
+        version_content = f"""
+[bold cyan]CLI Version:[/bold cyan] {CLI_VERSION}
 [bold green]Ollama Version:[/bold green] {ollama_version}
 
+[dim]CLI follows Semantic Versioning (SemVer):
+• MAJOR.MINOR.PATCH (e.g., {CLI_VERSION})
+• PATCH (+0.0.1): Bug fixes, improvements
+• MINOR (+0.1.0): New features, backward-compatible  
+• MAJOR (+1.0.0): Breaking changes, major overhauls
+
 Recent fixes in v1.0.4:
-• Fixed variable name error in main loop
-• Improved "Starting..." message handling
-• Removed redundant "select" command
-• Various bug fixes and stability improvements"""
+• Fixed verbose mode glitch
+• Added /set command for in-chat settings
+• Fixed starting message bug"""
         
         console.print(Panel(
             version_content,
@@ -904,23 +1039,72 @@ Recent fixes in v1.0.4:
         else:
             console.print("[dim]Chat mode started. Type your message or 'exit' to quit.[/dim]")
 
-    def cmd_unload(self):
+    def cmd_select(self):
+        _, width = self.cmd_list_boxwidth(None, interactive=True)
+        return True
+
+    def cmd_unload(self, args: List[str] = None):
+        """Enhanced unload command that works with model identifiers"""
+        if args is None:
+            args = []
+            
+        # Stop current operations first
         if self.streaming or self.loading:
             self.streaming = False
             self.loading = False
             console.print("[yellow]Stopping current operation...[/yellow]")
             time.sleep(0.5)
         
-        if self.current_model:
-            console.print(f"[yellow]Unloading {self.current_model}...[/yellow]")
-            if self.api.unload_model(self.current_model):
-                console.print(f"[green]Unloaded {self.current_model}[/green]")
-            else:
-                console.print(f"[yellow]Cleared local reference to {self.current_model}[/yellow]")
-            self.current_model = None
-            self.history.clear()
+        # Determine which model to unload
+        model_to_unload = None
+        
+        if args and len(args) >= 1:
+            # Model identifier provided
+            identifier = args[0]
+            available_models = self.api.list_models()
+            
+            if not available_models:
+                console.print("[red]No models available to unload[/red]")
+                return
+            
+            # Try to resolve identifier (number or name)
+            try:
+                model_number = int(identifier)
+                if 1 <= model_number <= len(available_models):
+                    model_to_unload = available_models[model_number - 1]["name"]
+                    console.print(f"[yellow]Selected model {model_number}:[/yellow] [cyan]{model_to_unload}[/cyan]")
+                else:
+                    console.print(f"[red]Invalid model number. Please choose 1-{len(available_models)}[/red]")
+                    return
+            except ValueError:
+                # Handle model name selection
+                model_names = [m["name"] for m in available_models]
+                if identifier in model_names:
+                    model_to_unload = identifier
+                else:
+                    console.print(f"[red]Model '{identifier}' not found locally[/red]")
+                    return
         else:
-            console.print("No model loaded")
+            # No argument - unload current model if any
+            if self.current_model:
+                model_to_unload = self.current_model
+            else:
+                console.print("[yellow]No model currently loaded to unload[/yellow]")
+                return
+        
+        # Unload the model
+        console.print(f"[yellow]Unloading {model_to_unload}...[/yellow]")
+        if self.api.unload_model(model_to_unload):
+            console.print(f"[green]Successfully unloaded {model_to_unload}[/green]")
+            # Clear current model and history if this was the active model
+            if self.current_model == model_to_unload:
+                self.current_model = None
+                self.history.clear()
+        else:
+            console.print(f"[yellow]Cleared local reference to {model_to_unload}[/yellow]")
+            if self.current_model == model_to_unload:
+                self.current_model = None
+                self.history.clear()
 
     def cmd_stop(self):
         if self.streaming or self.loading:
@@ -970,7 +1154,7 @@ Recent fixes in v1.0.4:
             console.print("System prompt cleared")
 
     def cmd_save(self, filename: str):
-        save_dir = os.path.expanduser("~/.ollama_cli")
+        save_dir = os.path.expanduser("~/Coding/Python")
         os.makedirs(save_dir, exist_ok=True)
         if not filename:
             filename = f"session_{datetime.now():%Y%m%d_%H%M%S}.json"
@@ -1000,7 +1184,7 @@ Recent fixes in v1.0.4:
             return
 
         if not os.path.dirname(filename):
-            filepath = os.path.join(os.path.expanduser("~/.ollama_cli"), filename)
+            filepath = os.path.join(os.path.expanduser("~/Coding/Python"), filename)
         else:
             filepath = os.path.expanduser(filename)
 
@@ -1043,6 +1227,7 @@ Recent fixes in v1.0.4:
         optimal_width = self._calculate_optimal_width()
         help_text = f"""Commands:
 list                  - List available models with numbers
+select                - Interactive model selection  
 pull <model>          - Download model
 run <model|number>    - Run model by name or number
 show <model>          - Show model info
@@ -1050,9 +1235,9 @@ rm <model|number>     - Remove/delete model
 copy <src> <dest>     - Copy model with new name
 create <name> [file]  - Create model from Modelfile
 push <model|number>   - Push model to registry
-ps                    - Show running models
+ps                    - Show detailed running models info
+unload [model|number] - Unload model (current if no arg)
 version               - Show CLI and Ollama versions
-unload                - Unload current model
 stop                  - Stop generation
 temp [value]          - Show/set temperature
 system [prompt]       - Set/clear system prompt
@@ -1063,6 +1248,15 @@ load <file>           - Load session
 help                  - Show this help
 exit                  - Quit
 
+In-Chat Commands:
+  /set verbose <true|false> - Enable/disable verbose mode
+  /set think <true|false>   - Enable/disable thinking mode
+  /help                     - Show this help
+
+Web Search:
+  Add '--search' to any message for web search
+  Example: \"what is quantum computing? --search\"
+
 Examples:
   run 2                         # Run model #2 from list
   run qwen3-thinking           # Run by model name
@@ -1072,126 +1266,121 @@ Examples:
   copy 2 my-model              # Copy model #2 with new name
   create my-model ./Modelfile  # Create from Modelfile
   push my-model                # Push model to registry
-  ps                           # Show running models
+  unload 2                     # Unload model #2 from list
+  unload llama3.1              # Unload by model name
+  unload                       # Unload current model
+  ps                           # Show detailed running models
   version                      # Show version info
 
-[dim]CLI Version: {CLI_VERSION}[/dim]
+[dim]CLI Version: {CLI_VERSION} | Following Semantic Versioning (SemVer)[/dim]
 """
         console.print(Panel(help_text, title="Help", border_style="cyan", box=box.ROUNDED, width=optimal_width))
 
     def _send_message(self, message: str):
         if not self.current_model:
-            console.print("No model loaded. Use 'run <model|number>' first.")
+            console.print("No model loaded. Use 'run <model|number>' or 'select' first.")
             return
 
-        self.history.append(ChatMsg("user", message))
+        original_message, use_search = self._parse_message(message)
+        search_context = ""
+
+        final_message = original_message
+
+        self.history.append(ChatMsg("user", original_message))
+
         messages = [{"role": m.role, "content": m.content} for m in self.history]
+        
+        system_prompt = self.system_prompt
         
         self.streaming = True
         self.loading = True
         thinking = ThinkingProcessor()
 
         print()
-        # Show loading animation with progress bar
-        with Progress(
-            SpinnerColumn(),
-            TextColumn("[progress.description]{task.description}"),
-            TextColumn("•"),
-            TextColumn("{task.fields[status]}", style="cyan dim"),
-            console=console,
-            transient=True
-        ) as progress:
-            task = progress.add_task("Generating", status="Starting...")
-            loading_progress = progress
-            
-            # Update status to show processing
-            loading_progress.update(task, status="Processing...")
-            
-            try:
-                thinking_displayed = False
-                thinking_done_displayed = False
-                is_thinking_model = False
-                collected_response = ""
-                first_chunk = True
+        if self.first_prompt:
+            console.print("[dim]Starting...[/dim]")
+            self.first_prompt = False
 
-                for chunk in self.api.chat_stream(self.current_model, messages, self.system_prompt, self.temp, self.verbose):
-                    if not self.streaming:
-                        break
+        try:
+            thinking_displayed = False
+            thinking_done_displayed = False
+            is_thinking_model = False
+            collected_response = ""
+            first_chunk = True
 
-                    # Verbose debug lines start with our marker:
-                    if self.verbose and chunk.startswith('\n[DEBUG'):
-                        console.print(chunk, style="yellow dim")
-                        continue
+            for chunk in self.api.chat_stream(self.current_model, messages, system_prompt, self.temp, self.verbose):
+                if not self.streaming:
+                    break
 
-                    # Handle error messages
-                    if chunk.startswith('\n[ERROR]'):
-                        console.print(chunk, style="red")
-                        break
+                # Verbose debug lines start with our marker:
+                if self.verbose and chunk.startswith('[DEBUG'):
+                    console.print(f"\n{chunk}", style="yellow dim")
+                    continue
 
-                    if first_chunk:
-                        self.loading = False
-                        first_chunk = False
-                        # Update status when we get the first chunk
-                        loading_progress.update(task, status="Receiving response...")
+                # Handle error messages
+                if chunk.startswith('\n[ERROR]'):
+                    console.print(chunk, style="red")
+                    break
 
+                if first_chunk:
+                    self.loading = False
+                    first_chunk = False
+
+                if self.thinking:
                     new_thinking, new_visible, started, finished = thinking.process_chunk(chunk)
-
                     if started:
                         is_thinking_model = True
+                else:
+                    new_thinking, new_visible, started, finished = "", chunk, False, False
 
-                    if is_thinking_model:
-                        if started and not thinking_displayed:
-                            # Update status to thinking
-                            loading_progress.update(task, status="Thinking...")
-                            thinking_displayed = True
+                if is_thinking_model and self.thinking:
+                    if started and not thinking_displayed:
+                        console.print(Text("Thinking...", style="dim"))
+                        thinking_displayed = True
 
-                        if thinking.thinking_active and new_thinking:
-                            console.print(Text(new_thinking, style="dim"), end="")
+                    if thinking.thinking_active and new_thinking:
+                        console.print(Text(new_thinking, style="dim"), end="")
 
-                        if finished and not thinking_done_displayed:
-                            console.print(Text("\n...done thinking\n", style="dim"))
-                            thinking_done_displayed = True
-                            # Update status after thinking is done
-                            loading_progress.update(task, status="Generating response...")
+                    if finished and not thinking_done_displayed:
+                        console.print(Text("\n...done thinking\n", style="dim"))
+                        thinking_done_displayed = True
 
-                        if new_visible and thinking_done_displayed:
-                            console.print(new_visible, end="", highlight=False)
-                            collected_response += new_visible
-                    else:
-                        if new_visible:
-                            console.print(new_visible, end="", highlight=False)
-                            collected_response += new_visible
-                
-                # Progress bar will automatically disappear when exiting the context
-                
-                if is_thinking_model:
-                    final_response = thinking.get_display_content()
-                    if final_response and final_response != collected_response:
-                        remaining = final_response.replace(collected_response, "")
-                        if remaining:
-                            console.print(remaining, end="", highlight=False)
-                            collected_response = final_response
+                    if new_visible and thinking_done_displayed:
+                        console.print(new_visible, end="", highlight=False)
+                        collected_response += new_visible
+                else:
+                    if new_visible:
+                        console.print(new_visible, end="", highlight=False)
+                        collected_response += new_visible
+            
+            if is_thinking_model and self.thinking:
+                final_response = thinking.get_display_content()
+                if final_response and final_response != collected_response:
+                    remaining = final_response.replace(collected_response, "")
+                    if remaining:
+                        console.print(remaining, end="", highlight=False)
+                        collected_response = final_response
 
-                console.print()
-                if collected_response:
-                    self.history.append(ChatMsg("assistant", collected_response))
+            console.print()
+            if collected_response:
+                self.history.append(ChatMsg("assistant", collected_response))
 
-            except KeyboardInterrupt:
-                console.print("\n[red]Generation interrupted[/red]")
-                loading_progress.update(task, status="[red]Interrupted[/red]")
-            except Exception as e:
-                console.print(f"\n[red]Error:[/red] {e}")
-                loading_progress.update(task, status=f"[red]Error: {e}[/red]")
-            finally:
-                self.streaming = False
-                self.loading = False
-                thinking.reset()
+        except KeyboardInterrupt:
+            console.print("\n[red]Generation interrupted[/red]")
+        except Exception as e:
+            console.print(f"\n[red]Error:[/red] {e}")
+        finally:
+            self.streaming = False
+            self.loading = False
+            thinking.reset()
 
     def run(self):
         # Calculate optimal width based on terminal size and content
         optimal_width = self._calculate_optimal_width()
         
-        banner_text = f"Maternion Ollama CLI v{CLI_VERSION}"
+        banner_text = (
+            f"Maternion Ollama CLI v{CLI_VERSION}"
+        )
         console.print(Panel(
             banner_text,
             title="Ollama CLI",
@@ -1211,6 +1400,10 @@ Examples:
                 if not user_input:
                     continue
 
+                if self.current_model and user_input.startswith("/"):
+                    if self._handle_slash_commands(user_input):
+                        continue
+
                 if self.current_model and user_input.lower() in ["exit", "/exit"]:
                     self.current_model = None
                     console.print("Exited chat mode")
@@ -1227,6 +1420,8 @@ Examples:
                     break
                 elif cmd == "list":
                     self.cmd_list_boxwidth(current_width)
+                elif cmd == "select":
+                    self.cmd_select()
                 elif cmd == "pull":
                     self.cmd_pull(args[0] if args else "")
                 elif cmd == "run":
@@ -1246,7 +1441,7 @@ Examples:
                 elif cmd == "version":
                     self.cmd_version()
                 elif cmd == "unload":
-                    self.cmd_unload()
+                    self.cmd_unload(args)
                 elif cmd == "stop":
                     self.cmd_stop()
                 elif cmd == "history":
@@ -1268,7 +1463,7 @@ Examples:
                         self._send_message(user_input)
                     else:
                         console.print(f"Unknown command: {cmd}")
-                        console.print("Type 'help' for commands or 'run <number>' to choose a model")
+                        console.print("Type 'help' for commands or 'run <number>' to select a model")
 
             except KeyboardInterrupt:
                 console.print("\nGoodbye!")
@@ -1297,6 +1492,8 @@ def main():
 
         if cmd == "list":
             cli.cmd_list()
+        elif cmd == "select":
+            cli.cmd_select()
         elif cmd == "run":
             cli.cmd_run(cmd_args)
         elif cmd == "pull":
@@ -1313,6 +1510,8 @@ def main():
             cli.cmd_push(cmd_args)
         elif cmd == "ps":
             cli.cmd_ps()
+        elif cmd == "unload":
+            cli.cmd_unload(cmd_args)
         elif cmd == "version":
             cli.cmd_version()
         else:
@@ -1322,4 +1521,3 @@ def main():
 
 if __name__ == "__main__":
     main()
-
