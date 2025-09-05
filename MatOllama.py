@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """
 Ollama CLI
-Version: 1.0.4
+Version: 1.0.5
 """
 import argparse
 import json
@@ -29,7 +29,7 @@ from rich.progress import Progress, SpinnerColumn, TextColumn
 # MAJOR: Breaking changes, major overhauls
 # MINOR: New features, backward-compatible
 # PATCH: Bug fixes, small improvements
-CLI_VERSION = "1.0.4"
+CLI_VERSION = "1.0.5"
 
 console = Console(highlight=False)
 
@@ -948,7 +948,7 @@ class CLI:
 • MINOR (+0.1.0): New features, backward-compatible  
 • MAJOR (+1.0.0): Breaking changes, major overhauls
 
-Recent fixes in v1.0.4:
+Recent fixes in v1.0.5:
 • Fixed verbose mode glitch
 • Added /set command for in-chat settings
 • Fixed starting message bug"""
@@ -1396,71 +1396,73 @@ Examples:
                 # Recalculate width in case terminal was resized
                 current_width = self._calculate_optimal_width()
                 user_input = self._input()
-                
+
                 if not user_input:
                     continue
 
-                if self.current_model and user_input.startswith("/"):
-                    if self._handle_slash_commands(user_input):
+                if self.current_model:
+                    # In chat mode, most commands are prompts
+                    if user_input.startswith("/"):
+                        if self._handle_slash_commands(user_input):
+                            continue
+                    elif user_input.lower() in ["exit", "/exit"]:
+                        self.current_model = None
+                        self.history.clear()
+                        console.print("Exited chat mode")
                         continue
-
-                if self.current_model and user_input.lower() in ["exit", "/exit"]:
-                    self.current_model = None
-                    console.print("Exited chat mode")
-                    continue
-
-                parts = user_input.split()
-                cmd = parts[0].lower()
-                args = parts[1:]
-
-                if cmd in ["exit", "quit"]:
-                    if self.history and Confirm.ask("Save session before exit?"):
-                        self.cmd_save("")
-                    console.print("Goodbye!")
-                    break
-                elif cmd == "list":
-                    self.cmd_list_boxwidth(current_width)
-                elif cmd == "select":
-                    self.cmd_select()
-                elif cmd == "pull":
-                    self.cmd_pull(args[0] if args else "")
-                elif cmd == "run":
-                    self.cmd_run(args)
-                elif cmd == "show":
-                    self.cmd_show(args[0] if args else "")
-                elif cmd in ["rm", "remove"]:
-                    self.cmd_rm(args)
-                elif cmd == "copy":
-                    self.cmd_copy(args)
-                elif cmd == "create":
-                    self.cmd_create(args)
-                elif cmd == "push":
-                    self.cmd_push(args)
-                elif cmd == "ps":
-                    self.cmd_ps()
-                elif cmd == "version":
-                    self.cmd_version()
-                elif cmd == "unload":
-                    self.cmd_unload(args)
-                elif cmd == "stop":
-                    self.cmd_stop()
-                elif cmd == "history":
-                    self.cmd_history()
-                elif cmd == "clear":
-                    self.cmd_clear()
-                elif cmd == "temp":
-                    self.cmd_temp(args[0] if args else "")
-                elif cmd == "system":
-                    self.cmd_system(" ".join(args))
-                elif cmd == "save":
-                    self.cmd_save(args[0] if args else "")
-                elif cmd == "load":
-                    self.cmd_load(args[0] if args else "")
-                elif cmd == "help":
-                    self.cmd_help()
+                    
+                    self._send_message(user_input)
                 else:
-                    if self.current_model:
-                        self._send_message(user_input)
+                    # Command mode
+                    parts = user_input.split()
+                    cmd = parts[0].lower()
+                    args = parts[1:]
+
+                    if cmd in ["exit", "quit"]:
+                        if self.history and Confirm.ask("Save session before exit?"):
+                            self.cmd_save("")
+                        console.print("Goodbye!")
+                        break
+                    elif cmd == "list":
+                        self.cmd_list_boxwidth(current_width)
+                    elif cmd == "select":
+                        self.cmd_select()
+                    elif cmd == "pull":
+                        self.cmd_pull(args[0] if args else "")
+                    elif cmd == "run":
+                        self.cmd_run(args)
+                    elif cmd == "show":
+                        self.cmd_show(args[0] if args else "")
+                    elif cmd in ["rm", "remove"]:
+                        self.cmd_rm(args)
+                    elif cmd == "copy":
+                        self.cmd_copy(args)
+                    elif cmd == "create":
+                        self.cmd_create(args)
+                    elif cmd == "push":
+                        self.cmd_push(args)
+                    elif cmd == "ps":
+                        self.cmd_ps()
+                    elif cmd == "version":
+                        self.cmd_version()
+                    elif cmd == "unload":
+                        self.cmd_unload(args)
+                    elif cmd == "stop":
+                        self.cmd_stop()
+                    elif cmd == "history":
+                        self.cmd_history()
+                    elif cmd == "clear":
+                        self.cmd_clear()
+                    elif cmd == "temp":
+                        self.cmd_temp(args[0] if args else "")
+                    elif cmd == "system":
+                        self.cmd_system(" ".join(args))
+                    elif cmd == "save":
+                        self.cmd_save(args[0] if args else "")
+                    elif cmd == "load":
+                        self.cmd_load(args[0] if args else "")
+                    elif cmd == "help":
+                        self.cmd_help()
                     else:
                         console.print(f"Unknown command: {cmd}")
                         console.print("Type 'help' for commands or 'run <number>' to select a model")
