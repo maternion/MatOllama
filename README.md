@@ -38,10 +38,7 @@ MatOllama is a polished command-line interface (CLI) for running and managing lo
    ```bash
    python3 MatOllama.py
    ```
-   or
-   ```bash
-   ./MatOllama.py
-   ```
+
 
 4. (Optional) Make the script executable:
    ```bash
