@@ -4,7 +4,7 @@
 
 <div align="center">
 
-*Professional terminal UX -  Context-aware switching -  Session persistence*
+Professional terminal UX -  Context-aware switching -  Session persistence
 
 </div>
 
@@ -389,6 +389,8 @@ ps      # Check what's running
 - Keep Sessions/ organized by date or topic
 - Regular cleanup of old exports and models
 
+***
+
 ## 🙏 Acknowledgments
 
 Built with love for the Ollama community. MatOllama leverages:
@@ -401,6 +403,6 @@ Built with love for the Ollama community. MatOllama leverages:
 
 **MatOllama v1.1.0** - Professional CLI for Local LLMs
 
-*[⭐ Star this repo](https://github.com/maternion/MatOllama) if MatOllama enhances your AI workflow!*
+[⭐ Star this repo](https://github.com/maternion/MatOllama) if MatOllama enhances your AI workflow!
 
 </div>
