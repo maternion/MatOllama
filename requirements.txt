@@ -1,0 +1,5 @@
+# Ollama CLI v1.1.0 Dependencies
+requests>=2.31.0
+rich>=13.7.1
+prompt-toolkit>=3.0.43
+inquirer>=3.2.4
