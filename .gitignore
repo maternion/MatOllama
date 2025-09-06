@@ -1,13 +1,16 @@
 # .gitignore for MatOllama (Python CLI)
 
-# Byte-compiled / cache
+# Python cache and compiled files
 __pycache__/
 *.py[cod]
 *.pyc
 *.pyo
 *.pyd
+*.so
 .pytest_cache/
 *.cover
+.coverage
+htmlcov/
 
 # Virtual environments
 .env
@@ -15,31 +18,74 @@ __pycache__/
 venv/
 ENV/
 env/
+.Python
 
-# Packaging / build artifacts
+# Distribution / packaging
 build/
+develop-eggs/
 dist/
-*.egg-info/
-*.egg
+downloads/
+eggs/
 .eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+*.egg-info/
+.installed.cfg
+*.egg
 
-# Logs and temp files
+# PyInstaller
+*.manifest
+*.spec
+
+# Logs and temporary files
 *.log
 *.tmp
 *.bak
 *.swp
+*~
 
-# IDE/editor settings
+# IDE and editor files
 .vscode/
 .idea/
 *.code-workspace
+*.sublime-project
+*.sublime-workspace
+.spyderproject
+.spyproject
 
-# OS-generated files
+# OS generated files
 .DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+ehthumbs.db
 Thumbs.db
 desktop.ini
 
-# Local CLI artifacts (safety; default path is ~/.ollama_cli)
-.ollama_cli/
+# MatOllama-specific user data (keep these private)
+Sessions/
+Exports/
+config.json
 .ollama_history
-*.json
+
+# Jupyter Notebook checkpoints
+.ipynb_checkpoints
+
+# pyenv
+.python-version
+
+# pipenv
+Pipfile.lock
+
+# Poetry
+poetry.lock
+
+# MyPy
+.mypy_cache/
+.dmypy.json
+dmypy.json
