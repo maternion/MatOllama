@@ -389,29 +389,6 @@ ps      # Check what's running
 - Keep Sessions/ organized by date or topic
 - Regular cleanup of old exports and models
 
-***
-
-## 📊 What's New in v1.1.0
-
-### 🔥 Major Features
-- **Context-Aware Switching**: `/switch` preserves full conversation history
-- **Persistent Configuration**: Themes and settings survive restarts
-- **Enhanced Export System**: JSON for datasets, text for sharing
-- **Organized File Structure**: Sessions/, Exports/, config.json
-
-### 🛠️ Improvements
-- **Fixed Table Display**: Serial numbers, proper spacing, no truncation
-- **Removed Autocomplete Issues**: Clean input without distractions
-- **Blocking UI**: Prevents input during long operations
-- **Better Error Handling**: More informative messages and recovery
-
-### 🎨 UX Enhancements
-- **Theme Consistency**: Colors applied throughout interface
-- **Improved Help**: Cleaner command documentation
-- **Better Prompts**: Clearer status messages and confirmations
-
-***
-
 ## 🙏 Acknowledgments
 
 Built with love for the Ollama community. MatOllama leverages:
