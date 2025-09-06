@@ -1,35 +1,32 @@
 #!/usr/bin/env python3
 """
 Ollama CLI
-Version: 1.0.5
+Version: 1.1.0
 """
 import argparse
 import json
 import os
 import sys
 import signal
-import readline
 import time
-import shutil
 from dataclasses import dataclass, field
 from datetime import datetime
 from typing import Generator, List, Dict, Optional
+from pathlib import Path
 import requests
 from requests.exceptions import RequestException
 from rich.console import Console
 from rich.table import Table
-from rich.prompt import Prompt, Confirm, IntPrompt
+from rich.prompt import Confirm, IntPrompt
 from rich.text import Text
 from rich import box
 from rich.panel import Panel
 from rich.progress import Progress, SpinnerColumn, TextColumn
+from prompt_toolkit import prompt
+from prompt_toolkit.history import FileHistory
+import inquirer
 
-# CLI Version following Semantic Versioning (SemVer)
-# MAJOR.MINOR.PATCH
-# MAJOR: Breaking changes, major overhauls
-# MINOR: New features, backward-compatible
-# PATCH: Bug fixes, small improvements
-CLI_VERSION = "1.0.5"
+CLI_VERSION = "1.1.0"
 
 console = Console(highlight=False)
 
@@ -38,8 +35,6 @@ class ChatMsg:
     role: str
     content: str
     ts: datetime = field(default_factory=datetime.now)
-
-
 
 class OllamaClient:
     def __init__(self, host: str = "http://localhost:11434", timeout: float = 300.0):
@@ -89,15 +84,11 @@ class OllamaClient:
                         
                     try:
                         data = json.loads(line.decode("utf-8"))
-                        
-                        # Update progress with current status
                         status = data.get('status', 'Unknown')
                         
-                        # Handle different status types with better descriptions
                         if status == 'pulling manifest':
                             progress.update(task, status="📋 Pulling manifest...")
                         elif status == 'downloading':
-                            # Show download progress if available
                             if 'completed' in data and 'total' in data:
                                 completed_bytes = data['completed']
                                 total_bytes = data['total']
@@ -116,7 +107,7 @@ class OllamaClient:
                         elif status == 'success':
                             progress.update(task, status="✅ Complete!")
                             completed = True
-                            time.sleep(0.5)  # Brief pause to show completion
+                            time.sleep(0.5)
                             break
                         elif 'error' in data:
                             error_msg = data.get('error', 'Unknown error')
@@ -258,7 +249,7 @@ class OllamaClient:
 
     def unload_model(self, model_name: str) -> bool:
         try:
-            self._request("POST", "/api/generate", json= {
+            self._request("POST", "/api/generate", json={
                 "model": model_name,
                 "keep_alive": 0
             })
@@ -290,17 +281,14 @@ class OllamaClient:
                 except json.JSONDecodeError:
                     continue
 
-                # Check for errors in response
                 if "error" in data:
                     yield f"\n[ERROR]: {data['error']}"
                     break
 
-                # Always yield assistant response if present
                 if "message" in data and "content" in data["message"]:
                     yield data["message"]["content"]
 
                 if verbose:
-                    # Show any extra debug keys in yellow (skip message/done)
                     for k, v in data.items():
                         if k not in ("message", "done", "error") and v and v != {} and v != []:
                             yield f"[DEBUG {k}]: {json.dumps(v, ensure_ascii=False)}"
@@ -394,10 +382,65 @@ class CLI:
         self.verbose = False
         self.first_prompt = True
         self.thinking = True
+        self.blocking_operation = False
+        
+        # Setup directories relative to script location
+        self.base_dir = Path(__file__).parent.absolute()
+        self.sessions_dir = self.base_dir / "Sessions"
+        self.exports_dir = self.base_dir / "Exports"
+        self.config_file = self.base_dir / "config.json"
+        
+        # Create directories
+        self.sessions_dir.mkdir(exist_ok=True)
+        self.exports_dir.mkdir(exist_ok=True)
+        
+        # Load configuration (including theme color)
+        self._load_config()
+        
+        # Setup prompt_toolkit history (FIXED: no autocomplete)
+        self.history_file = FileHistory(str(self.base_dir / ".ollama_history"))
         
         signal.signal(signal.SIGINT, self._signal_handler)
         self._check_connection()
-        self._setup_readline()
+
+    def _load_config(self):
+        """Load configuration from config.json"""
+        default_config = {
+            "theme_color": "cyan",
+            "temperature": 0.7,
+            "verbose": False,
+            "thinking": True
+        }
+        
+        try:
+            if self.config_file.exists():
+                with open(self.config_file, 'r') as f:
+                    config = json.load(f)
+                self.theme_color = config.get("theme_color", "cyan")
+                self.temp = config.get("temperature", 0.7)
+                self.verbose = config.get("verbose", False)
+                self.thinking = config.get("thinking", True)
+            else:
+                self.theme_color = default_config["theme_color"]
+                self._save_config()
+        except Exception as e:
+            console.print(f"[yellow]Warning: Could not load config, using defaults: {e}[/yellow]")
+            self.theme_color = default_config["theme_color"]
+
+    def _save_config(self):
+        """Save configuration to config.json"""
+        config = {
+            "theme_color": self.theme_color,
+            "temperature": self.temp,
+            "verbose": self.verbose,
+            "thinking": self.thinking
+        }
+        
+        try:
+            with open(self.config_file, 'w') as f:
+                json.dump(config, f, indent=2)
+        except Exception as e:
+            console.print(f"[yellow]Warning: Could not save config: {e}[/yellow]")
 
     def _signal_handler(self, sig, frame):
         if self.streaming or self.loading:
@@ -405,12 +448,12 @@ class CLI:
             self.loading = False
             console.print("\n[red]Generation interrupted[/red]")
         else:
-            console.print("\n[yellow]Use 'exit' to quit[/yellow]")
+            console.print("\n[yellow]Use '/exit' to quit chat mode[/yellow]")
 
     def _check_connection(self):
         try:
             models = self.api.list_models()
-            if models is not None:  # Check for None instead of just truthy
+            if models is not None:
                 console.print("[green]✓ Connected to Ollama[/green]")
             else:
                 console.print("[yellow]⚠ Connected to Ollama but no models found[/yellow]")
@@ -418,30 +461,20 @@ class CLI:
             console.print("[yellow]⚠ Cannot connect to Ollama[/yellow]")
             console.print("  Make sure Ollama is running: [cyan]ollama serve[/cyan]")
 
-    def _setup_readline(self):
-        try:
-            readline.parse_and_bind("tab: complete")
-            histfile = os.path.expanduser("~/.ollama_history")
-            try:
-                readline.read_history_file(histfile)
-                readline.set_history_length(1000)  # Limit history size
-            except FileNotFoundError:
-                pass
-            import atexit
-            atexit.register(readline.write_history_file, histfile)
-        except Exception:
-            pass
-
     def _get_prompt(self):
-        return "[cyan]You[/cyan]" if self.current_model else "[cyan]Ollama[/cyan]"
+        return "You: " if self.current_model else "Ollama: "
 
     def _input(self):
+        if self.blocking_operation:
+            return ""
+            
         print()
-        sys.stdout.flush()
         try:
-            prompt_text = self._get_prompt() + ": "
-            console.print(prompt_text, end="", highlight=False)
-            return input().strip()
+            # FIXED: Removed AutoSuggestFromHistory() to fix autocomplete issues
+            return prompt(
+                self._get_prompt(),
+                history=self.history_file
+            ).strip()
         except (KeyboardInterrupt, EOFError):
             return ""
         except Exception:
@@ -484,6 +517,70 @@ class CLI:
             else:
                 console.print(f"Unknown option: {option}")
 
+        elif command == "/switch":
+            if not args:
+                console.print("Usage: /switch <model|number>")
+                console.print("Examples:")
+                console.print("  /switch 2              # Switch to model #2")
+                console.print("  /switch qwen3-coder   # Switch to model by name")
+                self.cmd_list()
+                return True
+            
+            if self.current_model:
+                console.print(f"[yellow]Unloading {self.current_model}...[/yellow]")
+                self.api.unload_model(self.current_model)
+            
+            model_arg = args[0]
+            available_models = self.api.list_models()
+            
+            if not available_models:
+                console.print("[red]No models available[/red]")
+                return True
+            
+            selected_model = None
+            
+            try:
+                model_number = int(model_arg)
+                if 1 <= model_number <= len(available_models):
+                    selected_model = available_models[model_number - 1]["name"]
+                    console.print(f"[green]Selected model {model_number}:[/green] [cyan]{selected_model}[/cyan]")
+                else:
+                    console.print(f"[red]Invalid model number. Please choose 1-{len(available_models)}[/red]")
+                    return True
+            except ValueError:
+                model_names = [m["name"] for m in available_models]
+                if model_arg in model_names:
+                    selected_model = model_arg
+                else:
+                    console.print(f"Model '{model_arg}' not found locally")
+                    if Confirm.ask(f"Pull '{model_arg}' from registry?"):
+                        if self.api.pull_model(model_arg):
+                            selected_model = model_arg
+                        else:
+                            return True
+                    else:
+                        return True
+            
+            if selected_model:
+                if self.history:
+                    context_prompt = "Previous conversation context:\n\n"
+                    for msg in self.history:
+                        context_prompt += f"{msg.role.title()}: {msg.content}\n\n"
+                    context_prompt += f"You are now {selected_model}. Please continue this conversation naturally, acknowledging the context above."
+                    
+                    self.system_prompt = context_prompt
+                    console.print(f"[dim]Transferring conversation context to {selected_model}...[/dim]")
+                
+                self.current_model = selected_model
+                console.print(f"[green]✓ Switched to:[/green] [{self.theme_color}]{selected_model}[/{self.theme_color}]")
+                console.print("[dim]Continue chatting with the new model...[/dim]")
+
+        elif command == "/exit":
+            self.current_model = None
+            self.history.clear()
+            console.print("Exited chat mode")
+            return "EXIT"
+
         elif command == "/help":
             self.cmd_help()
         else:
@@ -500,72 +597,47 @@ class CLI:
             size_bytes /= 1024
         return f"{size_bytes:.1f} PB"
 
-    def _parse_message(self, user_input: str) -> tuple[str, bool]:
-        return user_input, False
-
-    
-
     def _get_terminal_width(self) -> int:
-        """Get current terminal width using multiple methods for reliability"""
         try:
-            # Method 1: Rich console size
             return console.size.width
         except:
-            try:
-                # Method 2: shutil.get_terminal_size()
-                return shutil.get_terminal_size().columns
-            except:
-                try:
-                    # Method 3: os.get_terminal_size()
-                    return os.get_terminal_size().columns
-                except:
-                    # Fallback to reasonable default
-                    return 80
+            return 80
 
     def _calculate_optimal_width(self) -> int:
-        """Calculate optimal width based on content and terminal constraints"""
+        """FIXED: Simple width calculation that works reliably"""
         models = self.api.list_models()
         terminal_width = self._get_terminal_width()
         
-        # Set reasonable minimum width
         min_width = 60
+        max_width = 120
         
-        # If no models, return reasonable default within terminal bounds
         if not models:
-            return min(80, terminal_width - 2)  # -2 for padding
+            return min(80, terminal_width - 2)
         
-        # Find longest model name
-        max_name_len = max(len(m.get("name", "")) for m in models)
-        
-        # Calculate required width for all columns:
-        # Index(3) + Name(max_name_len+2 for arrow) + ID(12) + Size(10) + Modified(16) + padding(~15)
-        content_width = 3 + (max_name_len + 2) + 12 + 10 + 16 + 15
-        
-        # Use the larger of minimum width or content width, but cap at terminal width
-        optimal_width = max(min_width, content_width)
-        final_width = min(optimal_width, terminal_width - 2)  # -2 for safe margin
-        
-        return final_width
+        # Simple approach: use terminal width if reasonable, otherwise default
+        if terminal_width >= min_width and terminal_width <= max_width:
+            return terminal_width - 2
+        else:
+            return min_width
 
     def cmd_list_boxwidth(self, width=None, interactive=False):
         models = self.api.list_models()
         
-        # Calculate optimal width if not provided
         if width is None:
             width = self._calculate_optimal_width()
         
         if not models:
             console.print(Panel(
                 "No models found. Use 'pull <model>' to download.",
-                title="Models", border_style="cyan", box=box.ROUNDED, width=width
+                title="Models", border_style=self.theme_color, box=box.ROUNDED, width=width
             ))
             return False, width
 
-        table = Table(title="Available Models", box=box.ROUNDED, border_style="cyan", width=width)
+        table = Table(title="Available Models", box=box.ROUNDED, border_style=self.theme_color, width=width)
         
-        # Add columns with appropriate constraints
-        table.add_column("#", style="cyan", width=3, max_width=3)
-        table.add_column("Name")  # Flexible for model names
+        # FIXED: Restore proper columns with serial numbers
+        table.add_column("#", style=self.theme_color, width=3, max_width=3)
+        table.add_column("Name")
         table.add_column("ID", width=12, max_width=12)
         table.add_column("Size", width=10, max_width=10)
         table.add_column("Modified", width=16, max_width=16)
@@ -585,6 +657,7 @@ class CLI:
             if name == self.current_model:
                 name = f"→ {name}"
             
+            # FIXED: Add serial numbers back
             table.add_row(str(i), name, model_id, size, modified)
 
         console.print(table)
@@ -621,9 +694,6 @@ class CLI:
     def cmd_rm(self, args: List[str]):
         if not args:
             console.print("Usage: rm <model|number>")
-            console.print("Examples:")
-            console.print("  rm 2                     # Remove model #2 from list")
-            console.print("  rm llama3.1             # Remove by model name")
             self.cmd_list()
             return
         
@@ -636,7 +706,6 @@ class CLI:
         
         selected_model = None
         
-        # Handle numeric selection
         try:
             model_number = int(model_arg)
             if 1 <= model_number <= len(available_models):
@@ -646,7 +715,6 @@ class CLI:
                 console.print(f"[red]Invalid model number. Please choose 1-{len(available_models)}[/red]")
                 return
         except ValueError:
-            # Handle model name selection
             model_names = [m["name"] for m in available_models]
             if model_arg in model_names:
                 selected_model = model_arg
@@ -654,29 +722,80 @@ class CLI:
                 console.print(f"Model '{model_arg}' not found locally")
                 return
         
-        # Safety confirmation
         if not Confirm.ask(f"[red]Are you sure you want to delete '{selected_model}'?[/red]"):
             console.print("Deletion cancelled")
             return
         
-        # If currently loaded model is being deleted, unload it first
         if self.current_model == selected_model:
             console.print(f"[yellow]Unloading currently active model: {selected_model}[/yellow]")
             self.cmd_unload()
         
-        # Delete the model
         console.print(f"[red]Deleting {selected_model}...[/red]")
         if self.api.delete_model(selected_model):
             console.print(f"[green]Successfully deleted {selected_model}[/green]")
         else:
             console.print(f"[red]Failed to delete {selected_model}[/red]")
 
+    def cmd_rename(self, args: List[str]):
+        if len(args) < 2:
+            console.print("Usage: rename <old_model|number> <new_name>")
+            self.cmd_list()
+            return
+        
+        old_arg, new_name = args[0], args[1]
+        available_models = self.api.list_models()
+        
+        if not available_models:
+            console.print("No models available to rename")
+            return
+        
+        old_model = None
+        
+        try:
+            model_number = int(old_arg)
+            if 1 <= model_number <= len(available_models):
+                old_model = available_models[model_number - 1]["name"]
+                console.print(f"[green]Selected model {model_number}:[/green] [{self.theme_color}]{old_model}[/{self.theme_color}]")
+            else:
+                console.print(f"[red]Invalid model number. Please choose 1-{len(available_models)}[/red]")
+                return
+        except ValueError:
+            model_names = [m["name"] for m in available_models]
+            if old_arg in model_names:
+                old_model = old_arg
+            else:
+                console.print(f"Model '{old_arg}' not found locally")
+                return
+        
+        self.blocking_operation = True
+        console.print(f"[yellow]Renaming {old_model} to {new_name}...[/yellow]")
+        console.print(f"[dim]Please wait, this may take some time on slower drives...[/dim]")
+        
+        try:
+            console.print(f"[dim]Copying {old_model}...[/dim]")
+            if not self.api.copy_model(old_model, new_name):
+                console.print(f"[red]Failed to copy {old_model}[/red]")
+                return
+            
+            console.print(f"[dim]Removing original {old_model}...[/dim]")
+            if not self.api.delete_model(old_model):
+                console.print(f"[yellow]Warning: Copy succeeded but failed to delete original {old_model}[/yellow]")
+                console.print(f"[yellow]You now have both {old_model} and {new_name}[/yellow]")
+            else:
+                console.print(f"[green]Successfully renamed {old_model} to {new_name}[/green]")
+            
+            if self.current_model == old_model:
+                self.current_model = new_name
+                console.print(f"[dim]Updated active model to {new_name}[/dim]")
+                
+        except Exception as e:
+            console.print(f"[red]Rename operation failed: {e}[/red]")
+        finally:
+            self.blocking_operation = False
+
     def cmd_copy(self, args: List[str]):
         if len(args) < 2:
             console.print("Usage: copy <source_model|number> <destination_name>")
-            console.print("Examples:")
-            console.print("  copy 2 my-custom-model    # Copy model #2 with new name")
-            console.print("  copy llama3.1 llama-fine  # Copy by model name")
             self.cmd_list()
             return
         
@@ -689,17 +808,15 @@ class CLI:
         
         source_model = None
         
-        # Handle numeric selection
         try:
             model_number = int(source_arg)
             if 1 <= model_number <= len(available_models):
                 source_model = available_models[model_number - 1]["name"]
-                console.print(f"[green]Selected model {model_number}:[/green] [cyan]{source_model}[/cyan]")
+                console.print(f"[green]Selected model {model_number}:[/green] [{self.theme_color}]{source_model}[/{self.theme_color}]")
             else:
                 console.print(f"[red]Invalid model number. Please choose 1-{len(available_models)}[/red]")
                 return
         except ValueError:
-            # Handle model name selection
             model_names = [m["name"] for m in available_models]
             if source_arg in model_names:
                 source_model = source_arg
@@ -707,7 +824,6 @@ class CLI:
                 console.print(f"Model '{source_arg}' not found locally")
                 return
         
-        # Copy the model
         console.print(f"[yellow]Copying {source_model} to {destination}...[/yellow]")
         if self.api.copy_model(source_model, destination):
             console.print(f"[green]Successfully copied {source_model} to {destination}[/green]")
@@ -717,16 +833,12 @@ class CLI:
     def cmd_create(self, args: List[str]):
         if not args:
             console.print("Usage: create <model_name> [modelfile_path]")
-            console.print("Examples:")
-            console.print("  create my-model ./Modelfile    # Create from file")
-            console.print("  create my-model                # Create interactively")
             return
         
         model_name = args[0]
         modelfile_content = ""
         
         if len(args) > 1:
-            # Read from file
             modelfile_path = os.path.expanduser(args[1])
             try:
                 if not os.path.exists(modelfile_path):
@@ -740,13 +852,12 @@ class CLI:
                 console.print(f"[red]Error reading {modelfile_path}: {e}[/red]")
                 return
         else:
-            # Interactive input
             console.print("[yellow]Enter Modelfile content (type 'END' on a new line to finish):[/yellow]")
             console.print("[dim]Example: FROM llama3[/dim]")
             lines = []
             while True:
                 try:
-                    line = input()
+                    line = prompt("Modelfile> ")
                     if line.strip() == "END":
                         break
                     lines.append(line)
@@ -759,7 +870,6 @@ class CLI:
             console.print("[red]Empty Modelfile content[/red]")
             return
         
-        # Create the model
         if self.api.create_model(model_name, modelfile_content):
             console.print(f"[green]Successfully created {model_name}[/green]")
         else:
@@ -768,9 +878,6 @@ class CLI:
     def cmd_push(self, args: List[str]):
         if not args:
             console.print("Usage: push <model|number>")
-            console.print("Examples:")
-            console.print("  push 2                    # Push model #2 from list")
-            console.print("  push my-custom-model     # Push by model name")
             console.print("[dim]Note: You must be logged in to push models[/dim]")
             self.cmd_list()
             return
@@ -784,17 +891,15 @@ class CLI:
         
         selected_model = None
         
-        # Handle numeric selection
         try:
             model_number = int(model_arg)
             if 1 <= model_number <= len(available_models):
                 selected_model = available_models[model_number - 1]["name"]
-                console.print(f"[green]Selected model {model_number}:[/green] [cyan]{selected_model}[/cyan]")
+                console.print(f"[green]Selected model {model_number}:[/green] [{self.theme_color}]{selected_model}[/{self.theme_color}]")
             else:
                 console.print(f"[red]Invalid model number. Please choose 1-{len(available_models)}[/red]")
                 return
         except ValueError:
-            # Handle model name selection
             model_names = [m["name"] for m in available_models]
             if model_arg in model_names:
                 selected_model = model_arg
@@ -802,19 +907,16 @@ class CLI:
                 console.print(f"Model '{model_arg}' not found locally")
                 return
         
-        # Confirm push
         if not Confirm.ask(f"Push '{selected_model}' to registry?"):
             console.print("Push cancelled")
             return
         
-        # Push the model
         if self.api.push_model(selected_model):
             console.print(f"[green]Successfully pushed {selected_model}[/green]")
         else:
             console.print(f"[red]Failed to push {selected_model}[/red]")
 
     def cmd_ps(self):
-        """Show detailed running models info like official ollama ps"""
         try:
             response = self.api._request("GET", "/api/ps")
             data = response.json()
@@ -824,105 +926,34 @@ class CLI:
                 console.print("[dim]No models currently running[/dim]")
                 return
             
-            # Collect all possible field names from all models
-            all_fields = set()
-            for model in running_models:
-                all_fields.update(model.keys())
-            
-            # Define preferred column order (matching ollama ps output)
-            preferred_order = [
-                "name", "id", "digest", "size", "processor", "until", 
-                "expires_at", "size_vram", "memory", "usage", "uptime", 
-                "created_at", "port", "pid"
-            ]
-            
-            # Build final column list with preferred ordering
-            columns = []
-            for field in preferred_order:
-                if field in all_fields:
-                    columns.append(field)
-            
-            # Add any remaining fields not in preferred order
-            remaining_fields = sorted(all_fields - set(preferred_order))
-            columns.extend(remaining_fields)
-            
-            # Create table
             optimal_width = self._calculate_optimal_width()
-            table = Table(title="Running Models", box=box.ROUNDED, border_style="green", width=optimal_width)
+            table = Table(title="Running Models", box=box.ROUNDED, border_style=self.theme_color, width=optimal_width)
             
-            # Add columns with proper headers
-            for col in columns:
-                header = col.replace("_", " ").title()
-                if col in ["name"]:
-                    table.add_column(header, style="green")
-                elif col in ["id", "digest"]:
-                    table.add_column(header, width=12, max_width=12)
-                elif col in ["size", "memory", "size_vram"]:
-                    table.add_column(header, width=10, max_width=10)
-                elif col in ["until", "expires_at", "created_at"]:
-                    table.add_column(header, width=20, max_width=20)
-                elif col in ["processor"]:
-                    table.add_column(header, width=12, max_width=12)
-                else:
-                    table.add_column(header)
+            table.add_column("Name", style=self.theme_color)
+            table.add_column("Size", width=10, max_width=10)
+            table.add_column("Processor", width=12, max_width=12)
+            table.add_column("Until", width=20, max_width=20)
             
-            # Add rows
             for model in running_models:
-                row = []
-                for col in columns:
-                    value = model.get(col, "-")
-                    
-                    # Format specific field types
-                    if col in ["size", "memory", "size_vram"] and isinstance(value, int):
-                        value = self._format_size(value)
-                    elif col in ["until", "expires_at", "created_at"] and isinstance(value, str) and value != "-":
-                        try:
-                            # Handle ISO datetime format
-                            dt = datetime.fromisoformat(value.replace("Z", "+00:00"))
-                            if col == "until":
-                                # Show relative time for "until" field
-                                now = datetime.now(dt.tzinfo)
-                                diff = dt - now
-                                if diff.total_seconds() > 0:
-                                    minutes = int(diff.total_seconds() / 60)
-                                    if minutes < 60:
-                                        value = f"{minutes} minutes from now"
-                                    else:
-                                        hours = minutes // 60
-                                        value = f"{hours} hours from now"
-                                else:
-                                    value = "expired"
-                            else:
-                                value = dt.strftime("%Y-%m-%d %H:%M:%S")
-                        except:
-                            # Keep original value if parsing fails
-                            pass
-                    elif col == "uptime" and isinstance(value, int):
-                        # Convert uptime seconds to human readable
-                        seconds = value
-                        hours = seconds // 3600
-                        minutes = (seconds % 3600) // 60
-                        secs = seconds % 60
-                        if hours > 0:
-                            value = f"{hours}h {minutes}m"
-                        elif minutes > 0:
-                            value = f"{minutes}m {secs}s"
-                        else:
-                            value = f"{secs}s"
-                    elif col == "processor" and isinstance(value, str):
-                        # Format processor info (e.g., "100% GPU" or "CPU")
-                        value = value.upper() if value != "-" else "-"
-                    elif col in ["id", "digest"] and isinstance(value, str) and len(value) > 12:
-                        # Truncate long IDs/digests
-                        value = value[:12]
-                    elif col == "usage" and isinstance(value, (int, float)):
-                        value = f"{value:.1f}%"
-                    elif value is None:
-                        value = "-"
-                    
-                    row.append(str(value))
+                name = model.get("name", "Unknown")
+                size = self._format_size(model.get("size", 0))
+                processor = model.get("processor", "-")
+                until = model.get("until", "-")
                 
-                table.add_row(*row)
+                if until != "-":
+                    try:
+                        dt = datetime.fromisoformat(until.replace("Z", "+00:00"))
+                        now = datetime.now(dt.tzinfo)
+                        diff = dt - now
+                        if diff.total_seconds() > 0:
+                            minutes = int(diff.total_seconds() / 60)
+                            until = f"{minutes} min" if minutes < 60 else f"{minutes//60} hrs"
+                        else:
+                            until = "expired"
+                    except:
+                        until = until[:16]
+                
+                table.add_row(name, size, processor, until)
             
             console.print(table)
             
@@ -930,33 +961,26 @@ class CLI:
             console.print(f"[red]Error fetching running models: {e}[/red]")
 
     def cmd_version(self):
-        """Show both CLI and Ollama version information"""
         optimal_width = self._calculate_optimal_width()
         
-        # Get Ollama version
         ollama_version_info = self.api.get_version()
         ollama_version = ollama_version_info.get('version', 'Unknown')
         
-        # Create version display
         version_content = f"""
-[bold cyan]CLI Version:[/bold cyan] {CLI_VERSION}
+[bold {self.theme_color}]CLI Version:[/bold {self.theme_color}] {CLI_VERSION}
 [bold green]Ollama Version:[/bold green] {ollama_version}
 
-[dim]CLI follows Semantic Versioning (SemVer):
-• MAJOR.MINOR.PATCH (e.g., {CLI_VERSION})
-• PATCH (+0.0.1): Bug fixes, improvements
-• MINOR (+0.1.0): New features, backward-compatible  
-• MAJOR (+1.0.0): Breaking changes, major overhauls
-
-Recent fixes in v1.0.5:
-• Fixed verbose mode glitch
-• Added /set command for in-chat settings
-• Fixed starting message bug"""
+[dim]Enhanced Ollama CLI with:
+• Context-aware model switching
+• Persistent themes & settings  
+• Conversation export (JSON/text)
+• Dynamic model list display
+• Professional terminal UI[/dim]"""
         
         console.print(Panel(
             version_content,
             title="Version Information",
-            border_style="cyan",
+            border_style=self.theme_color,
             box=box.ROUNDED,
             width=min(optimal_width, 70)
         ))
@@ -974,18 +998,13 @@ Recent fixes in v1.0.5:
                 
             optimal_width = self._calculate_optimal_width()
             panel_content = f"Name: {info.get('name', 'Unknown')}\nSize: {self._format_size(info.get('size', 0))}\nModified: {info.get('modified_at', 'Unknown')}\nID: {info.get('digest', '-')[:12]}"
-            console.print(Panel(panel_content, title="Model Info", border_style="cyan", box=box.ROUNDED, width=optimal_width))
+            console.print(Panel(panel_content, title="Model Info", border_style=self.theme_color, box=box.ROUNDED, width=optimal_width))
         except Exception as e:
             console.print(f"[red]Error: {e}[/red]")
 
     def cmd_run(self, args: List[str]):
         if not args:
             console.print("Usage: run <model|number> [prompt]")
-            console.print("Examples:")
-            console.print("  run 2                    # Run model #2 from list")
-            console.print("  run llama3.1            # Run by model name")
-            console.print("  run 2 'Hello world'     # Run with immediate prompt")
-            console.print("  run 2 --verbose         # Run with verbose mode")
             self.cmd_list()
             return
 
@@ -1011,7 +1030,7 @@ Recent fixes in v1.0.5:
             model_number = int(model_arg)
             if 1 <= model_number <= len(available_models):
                 selected_model = available_models[model_number - 1]["name"]
-                console.print(f"[green]Selected model {model_number}:[/green] [cyan]{selected_model}[/cyan]")
+                console.print(f"[green]Selected model {model_number}:[/green] [{self.theme_color}]{selected_model}[/{self.theme_color}]")
             else:
                 console.print(f"[red]Invalid model number. Please choose 1-{len(available_models)}[/red]")
                 return
@@ -1030,36 +1049,74 @@ Recent fixes in v1.0.5:
 
         self.current_model = selected_model
         self.verbose = verbose
-        console.print(f"[green]✓[/green] Using model: [cyan]{selected_model}[/cyan]")
+        console.print(f"[green]✓[/green] Using model: [{self.theme_color}]{selected_model}[/{self.theme_color}]")
         if verbose:
             console.print("[dim]Verbose mode enabled[/dim]")
 
         if prompt:
             self._send_message(prompt)
         else:
-            console.print("[dim]Chat mode started. Type your message or 'exit' to quit.[/dim]")
+            console.print("[dim]Chat mode started. Type your message or '/exit' to quit.[/dim]")
 
     def cmd_select(self):
-        _, width = self.cmd_list_boxwidth(None, interactive=True)
-        return True
+        models = self.api.list_models()
+        
+        if not models:
+            console.print(Panel(
+                "No models found. Use 'pull <model>' to download.",
+                title="Models", border_style=self.theme_color, box=box.ROUNDED
+            ))
+            return False
+        
+        choices = []
+        for i, m in enumerate(models, 1):
+            name = m.get("name", "Unknown")
+            size = self._format_size(m.get("size", 0))
+            if name == self.current_model:
+                name = f"→ {name}"
+            choices.append(f"{i:2d}. {name} ({size})")
+        
+        try:
+            questions = [
+                inquirer.List(
+                    'model',
+                    message="Select a model (use arrow keys, Enter to confirm)",
+                    choices=choices,
+                    carousel=True
+                ),
+            ]
+            
+            answers = inquirer.prompt(questions)
+            if answers and answers['model']:
+                selected_text = answers['model']
+                model_num = int(selected_text.split('.')[0].strip())
+                
+                if 1 <= model_num <= len(models):
+                    self.current_model = models[model_num-1]["name"]
+                    console.print(f"[green]✓ Selected:[/green] [{self.theme_color}]{self.current_model}[/{self.theme_color}]")
+                    console.print("[dim]Start chatting or type '/exit' to return to command mode.[/dim]")
+                    return True
+            
+            console.print("Selection cancelled")
+            return False
+            
+        except (KeyboardInterrupt, EOFError):
+            console.print("\nSelection cancelled")
+            return False
 
     def cmd_unload(self, args: List[str] = None):
-        """Enhanced unload command that works with model identifiers"""
         if args is None:
             args = []
             
-        # Stop current operations first
         if self.streaming or self.loading:
             self.streaming = False
             self.loading = False
             console.print("[yellow]Stopping current operation...[/yellow]")
             time.sleep(0.5)
         
-        # Determine which model to unload
         model_to_unload = None
         
         if args and len(args) >= 1:
-            # Model identifier provided
             identifier = args[0]
             available_models = self.api.list_models()
             
@@ -1067,17 +1124,15 @@ Recent fixes in v1.0.5:
                 console.print("[red]No models available to unload[/red]")
                 return
             
-            # Try to resolve identifier (number or name)
             try:
                 model_number = int(identifier)
                 if 1 <= model_number <= len(available_models):
                     model_to_unload = available_models[model_number - 1]["name"]
-                    console.print(f"[yellow]Selected model {model_number}:[/yellow] [cyan]{model_to_unload}[/cyan]")
+                    console.print(f"[yellow]Selected model {model_number}:[/yellow] [{self.theme_color}]{model_to_unload}[/{self.theme_color}]")
                 else:
                     console.print(f"[red]Invalid model number. Please choose 1-{len(available_models)}[/red]")
                     return
             except ValueError:
-                # Handle model name selection
                 model_names = [m["name"] for m in available_models]
                 if identifier in model_names:
                     model_to_unload = identifier
@@ -1085,18 +1140,15 @@ Recent fixes in v1.0.5:
                     console.print(f"[red]Model '{identifier}' not found locally[/red]")
                     return
         else:
-            # No argument - unload current model if any
             if self.current_model:
                 model_to_unload = self.current_model
             else:
                 console.print("[yellow]No model currently loaded to unload[/yellow]")
                 return
         
-        # Unload the model
         console.print(f"[yellow]Unloading {model_to_unload}...[/yellow]")
         if self.api.unload_model(model_to_unload):
             console.print(f"[green]Successfully unloaded {model_to_unload}[/green]")
-            # Clear current model and history if this was the active model
             if self.current_model == model_to_unload:
                 self.current_model = None
                 self.history.clear()
@@ -1122,7 +1174,7 @@ Recent fixes in v1.0.5:
         for msg in self.history:
             ts = msg.ts.strftime("%H:%M:%S")
             if msg.role == "user":
-                console.print(f"[cyan]You[/cyan] [{ts}]: {msg.content}")
+                console.print(f"[{self.theme_color}]You[/{self.theme_color}] [{ts}]: {msg.content}")
             else:
                 console.print(f"[green]{self.current_model or 'Assistant'}[/green] [{ts}]:")
                 console.print(msg.content)
@@ -1140,6 +1192,7 @@ Recent fixes in v1.0.5:
             temp = float(value)
             if 0 <= temp <= 2:
                 self.temp = temp
+                self._save_config()
                 console.print(f"Temperature set to {temp}")
             else:
                 console.print("Temperature must be between 0.0 and 2.0")
@@ -1153,21 +1206,105 @@ Recent fixes in v1.0.5:
         else:
             console.print("System prompt cleared")
 
+    def cmd_theme(self, color: str):
+        if not color:
+            console.print(f"Current theme: [{self.theme_color}]{self.theme_color}[/{self.theme_color}]")
+            console.print("Available: red, green, yellow, blue, magenta, cyan")
+            return
+            
+        available_colors = ["red", "green", "yellow", "blue", "magenta", "cyan"]
+        if color.lower() in available_colors:
+            self.theme_color = color.lower()
+            self._save_config()
+            console.print(f"[{self.theme_color}]Theme color set to {color}[/{self.theme_color}]")
+        else:
+            console.print("Available: red, green, yellow, blue, magenta, cyan")
+
+    def cmd_export(self, args: List[str]):
+        if not self.history:
+            console.print("[yellow]No conversation history to export[/yellow]")
+            return
+        
+        export_format = "json"
+        filename = None
+        
+        if args:
+            if args[0].lower() in ["json", "text", "txt"]:
+                export_format = "json" if args[0].lower() == "json" else "text"
+                filename = args[1] if len(args) > 1 else None
+            else:
+                filename = args[0]
+        
+        if not filename:
+            timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+            model_name = self.current_model or "unknown"
+            safe_model_name = model_name.replace(":", "_").replace("/", "_")
+            extension = "json" if export_format == "json" else "txt"
+            filename = f"chat_{safe_model_name}_{timestamp}.{extension}"
+        
+        if export_format == "json" and not filename.endswith('.json'):
+            filename += '.json'
+        elif export_format == "text" and not (filename.endswith('.txt') or filename.endswith('.md')):
+            filename += '.txt'
+        
+        filepath = self.exports_dir / filename
+        
+        try:
+            if export_format == "json":
+                export_data = {
+                    "conversation_id": f"ollama_chat_{datetime.now().strftime('%Y%m%d_%H%M%S')}",
+                    "model": self.current_model or "unknown",
+                    "created": datetime.now().isoformat(),
+                    "message_count": len(self.history),
+                    "messages": [
+                        {
+                            "role": msg.role,
+                            "content": msg.content,
+                            "timestamp": msg.ts.isoformat()
+                        }
+                        for msg in self.history
+                    ]
+                }
+                
+                with open(filepath, 'w', encoding='utf-8') as f:
+                    json.dump(export_data, f, indent=2, ensure_ascii=False)
+                    
+            else:
+                with open(filepath, 'w', encoding='utf-8') as f:
+                    f.write(f"Ollama CLI Conversation Export\n")
+                    f.write(f"Model: {self.current_model or 'Unknown'}\n")
+                    f.write(f"Generated: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n")
+                    f.write(f"Messages: {len(self.history)}\n")
+                    f.write("=" * 50 + "\n\n")
+                    
+                    for msg in self.history:
+                        timestamp = msg.ts.strftime("%H:%M:%S")
+                        if msg.role == "user":
+                            f.write(f"You [{timestamp}]: {msg.content}\n\n")
+                        else:
+                            f.write(f"{self.current_model or 'Assistant'} [{timestamp}]:\n{msg.content}\n\n")
+            
+            console.print(f"[green]Exported to:[/green] {filepath}")
+            console.print(f"[dim]Format: {export_format.upper()}, Messages: {len(self.history)}[/dim]")
+            
+        except Exception as e:
+            console.print(f"[red]Export failed: {e}[/red]")
+
     def cmd_save(self, filename: str):
-        save_dir = os.path.expanduser("~/Coding/Python")
-        os.makedirs(save_dir, exist_ok=True)
         if not filename:
             filename = f"session_{datetime.now():%Y%m%d_%H%M%S}.json"
-        if not os.path.dirname(filename):
-            filepath = os.path.join(save_dir, filename)
-        else:
-            filepath = os.path.expanduser(filename)
+        
+        if not filename.endswith('.json'):
+            filename += '.json'
+        
+        filepath = self.sessions_dir / filename
 
         data = {
             "cli_version": CLI_VERSION,
             "model": self.current_model,
             "system_prompt": self.system_prompt,
             "temperature": self.temp,
+            "theme_color": self.theme_color,
             "history": [{"role": m.role, "content": m.content, "timestamp": m.ts.isoformat()} for m in self.history]
         }
 
@@ -1183,20 +1320,22 @@ Recent fixes in v1.0.5:
             console.print("Usage: load <filename>")
             return
 
-        if not os.path.dirname(filename):
-            filepath = os.path.join(os.path.expanduser("~/Coding/Python"), filename)
-        else:
-            filepath = os.path.expanduser(filename)
+        if not filename.endswith('.json'):
+            filename += '.json'
+        
+        filepath = self.sessions_dir / filename
+        
+        if not filepath.exists():
+            filepath = Path(filename).expanduser()
 
         try:
-            if not os.path.exists(filepath):
+            if not filepath.exists():
                 console.print(f"[red]File not found: {filepath}[/red]")
                 return
                 
             with open(filepath, "r", encoding="utf-8") as f:
                 data = json.load(f)
             
-            # Check CLI version compatibility
             saved_version = data.get("cli_version", "Unknown")
             if saved_version != CLI_VERSION:
                 console.print(f"[yellow]Warning: Session saved with CLI version {saved_version}, current version is {CLI_VERSION}[/yellow]")
@@ -1206,8 +1345,10 @@ Recent fixes in v1.0.5:
             self.current_model = data.get("model")
             self.system_prompt = data.get("system_prompt", "")
             self.temp = data.get("temperature", 0.7)
+            self.theme_color = data.get("theme_color", "cyan")
             
-            # Safely load history
+            self._save_config()
+            
             history_data = data.get("history", [])
             self.history = []
             for h in history_data:
@@ -1215,7 +1356,6 @@ Recent fixes in v1.0.5:
                     timestamp = datetime.fromisoformat(h["timestamp"])
                     self.history.append(ChatMsg(h["role"], h["content"], timestamp))
                 except Exception:
-                    # Fallback for malformed timestamps
                     self.history.append(ChatMsg(h["role"], h["content"]))
             
             console.print(f"[green]Session loaded from {filepath}[/green]")
@@ -1226,71 +1366,54 @@ Recent fixes in v1.0.5:
     def cmd_help(self):
         optimal_width = self._calculate_optimal_width()
         help_text = f"""Commands:
-list                  - List available models with numbers
+list                  - List available models
 select                - Interactive model selection  
-pull <model>          - Download model
 run <model|number>    - Run model by name or number
 show <model>          - Show model info
-rm <model|number>     - Remove/delete model
+rm <model|number>     - Remove model
+rename <old> <new>    - Rename model (copy and delete original)
 copy <src> <dest>     - Copy model with new name
 create <name> [file]  - Create model from Modelfile
 push <model|number>   - Push model to registry
-ps                    - Show detailed running models info
-unload [model|number] - Unload model (current if no arg)
-version               - Show CLI and Ollama versions
+ps                    - Show running models
+unload [model|number] - Unload model
 stop                  - Stop generation
-temp [value]          - Show/set temperature
-system [prompt]       - Set/clear system prompt
-history               - Show conversation
+history               - Show conversation history
 clear                 - Clear conversation
+export [format] [file]- Export conversation (json/text)
+theme [color]         - Set color theme (persistent)
+temp [value]          - Set temperature (persistent)
 save [file]           - Save session
 load <file>           - Load session
+version               - Show version info
 help                  - Show this help
 exit                  - Quit
 
-In-Chat Commands:
-  /set verbose <true|false> - Enable/disable verbose mode
-  /set think <true|false>   - Enable/disable thinking mode
-  /help                     - Show this help
-
-Web Search:
-  Add '--search' to any message for web search
-  Example: \"what is quantum computing? --search\"
+In Chat:
+  /switch <model|number> - Switch model with context
+  /set verbose <true|false> - Toggle verbose mode
+  /set think <true|false>   - Toggle thinking mode
+  /exit                     - Exit chat mode
 
 Examples:
-  run 2                         # Run model #2 from list
-  run qwen3-thinking           # Run by model name
-  run 2 "Hello world"          # Run with immediate prompt
-  run 2 --verbose              # Run with verbose mode
-  rm 3                         # Remove model #3 from list
-  copy 2 my-model              # Copy model #2 with new name
-  create my-model ./Modelfile  # Create from Modelfile
-  push my-model                # Push model to registry
-  unload 2                     # Unload model #2 from list
-  unload llama3.1              # Unload by model name
-  unload                       # Unload current model
-  ps                           # Show detailed running models
-  version                      # Show version info
+  run 1
+  rename 1 mymodel  
+  export json
+  theme cyan
+  /switch 2
 
-[dim]CLI Version: {CLI_VERSION} | Following Semantic Versioning (SemVer)[/dim]
+[dim]CLI Version: {CLI_VERSION} | Settings persist between sessions[/dim]
 """
-        console.print(Panel(help_text, title="Help", border_style="cyan", box=box.ROUNDED, width=optimal_width))
+        console.print(Panel(help_text, title="Help", border_style=self.theme_color, box=box.ROUNDED, width=optimal_width))
 
     def _send_message(self, message: str):
         if not self.current_model:
             console.print("No model loaded. Use 'run <model|number>' or 'select' first.")
             return
 
-        original_message, use_search = self._parse_message(message)
-        search_context = ""
-
-        final_message = original_message
-
-        self.history.append(ChatMsg("user", original_message))
+        self.history.append(ChatMsg("user", message))
 
         messages = [{"role": m.role, "content": m.content} for m in self.history]
-        
-        system_prompt = self.system_prompt
         
         self.streaming = True
         self.loading = True
@@ -1308,16 +1431,14 @@ Examples:
             collected_response = ""
             first_chunk = True
 
-            for chunk in self.api.chat_stream(self.current_model, messages, system_prompt, self.temp, self.verbose):
+            for chunk in self.api.chat_stream(self.current_model, messages, self.system_prompt, self.temp, self.verbose):
                 if not self.streaming:
                     break
 
-                # Verbose debug lines start with our marker:
                 if self.verbose and chunk.startswith('[DEBUG'):
                     console.print(f"\n{chunk}", style="yellow dim")
                     continue
 
-                # Handle error messages
                 if chunk.startswith('\n[ERROR]'):
                     console.print(chunk, style="red")
                     break
@@ -1345,13 +1466,9 @@ Examples:
                         console.print(Text("\n...done thinking\n", style="dim"))
                         thinking_done_displayed = True
 
-                    if new_visible and thinking_done_displayed:
-                        console.print(new_visible, end="", highlight=False)
-                        collected_response += new_visible
-                else:
-                    if new_visible:
-                        console.print(new_visible, end="", highlight=False)
-                        collected_response += new_visible
+                if new_visible:
+                    console.print(new_visible, end="", highlight=False)
+                    collected_response += new_visible
             
             if is_thinking_model and self.thinking:
                 final_response = thinking.get_display_content()
@@ -1375,16 +1492,16 @@ Examples:
             thinking.reset()
 
     def run(self):
-        # Calculate optimal width based on terminal size and content
         optimal_width = self._calculate_optimal_width()
         
         banner_text = (
-            f"Maternion Ollama CLI v{CLI_VERSION}"
+            f"Enhanced Ollama CLI v{CLI_VERSION}\n"
+            f"[{self.theme_color}]✓ Context-aware switching • Persistent themes • Conversation export[/{self.theme_color}]"
         )
         console.print(Panel(
             banner_text,
             title="Ollama CLI",
-            border_style="cyan",
+            border_style=self.theme_color,
             box=box.ROUNDED,
             width=optimal_width
         ))
@@ -1393,7 +1510,6 @@ Examples:
         
         while True:
             try:
-                # Recalculate width in case terminal was resized
                 current_width = self._calculate_optimal_width()
                 user_input = self._input()
 
@@ -1401,19 +1517,15 @@ Examples:
                     continue
 
                 if self.current_model:
-                    # In chat mode, most commands are prompts
                     if user_input.startswith("/"):
-                        if self._handle_slash_commands(user_input):
+                        result = self._handle_slash_commands(user_input)
+                        if result == "EXIT":
                             continue
-                    elif user_input.lower() in ["exit", "/exit"]:
-                        self.current_model = None
-                        self.history.clear()
-                        console.print("Exited chat mode")
-                        continue
-                    
-                    self._send_message(user_input)
+                        elif result:
+                            continue
+                    else:
+                        self._send_message(user_input)
                 else:
-                    # Command mode
                     parts = user_input.split()
                     cmd = parts[0].lower()
                     args = parts[1:]
@@ -1435,12 +1547,18 @@ Examples:
                         self.cmd_show(args[0] if args else "")
                     elif cmd in ["rm", "remove"]:
                         self.cmd_rm(args)
+                    elif cmd == "rename":
+                        self.cmd_rename(args)
                     elif cmd == "copy":
                         self.cmd_copy(args)
                     elif cmd == "create":
                         self.cmd_create(args)
                     elif cmd == "push":
                         self.cmd_push(args)
+                    elif cmd == "export":
+                        self.cmd_export(args)
+                    elif cmd == "theme":
+                        self.cmd_theme(args[0] if args else "")
                     elif cmd == "ps":
                         self.cmd_ps()
                     elif cmd == "version":
@@ -1465,7 +1583,7 @@ Examples:
                         self.cmd_help()
                     else:
                         console.print(f"Unknown command: {cmd}")
-                        console.print("Type 'help' for commands or 'run <number>' to select a model")
+                        console.print("Type 'help' for commands or 'select' to choose a model")
 
             except KeyboardInterrupt:
                 console.print("\nGoodbye!")
@@ -1475,7 +1593,7 @@ Examples:
 
 def main():
     parser = argparse.ArgumentParser(
-        description=f"Ollama CLI v{CLI_VERSION}",
+        description=f"Enhanced Ollama CLI v{CLI_VERSION}",
         epilog=f"CLI Version: {CLI_VERSION} | Following Semantic Versioning (SemVer)"
     )
     parser.add_argument("--host", default="http://localhost:11434", help="Ollama host")
@@ -1504,12 +1622,18 @@ def main():
             cli.cmd_show(cmd_args[0] if cmd_args else "")
         elif cmd in ["rm", "remove"]:
             cli.cmd_rm(cmd_args)
+        elif cmd == "rename":
+            cli.cmd_rename(cmd_args)
         elif cmd == "copy":
             cli.cmd_copy(cmd_args)
         elif cmd == "create":
             cli.cmd_create(cmd_args)
         elif cmd == "push":
             cli.cmd_push(cmd_args)
+        elif cmd == "export":
+            cli.cmd_export(cmd_args)
+        elif cmd == "theme":
+            cli.cmd_theme(cmd_args[0] if cmd_args else "")
         elif cmd == "ps":
             cli.cmd_ps()
         elif cmd == "unload":
