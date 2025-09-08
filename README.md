@@ -401,7 +401,7 @@ Built with love for the Ollama community. MatOllama leverages:
 
 <div align="center">
 
-**MatOllama v1.1.0** - Professional CLI for Local LLMs
+**MatOllama** - Professional CLI for Local LLMs
 
 [⭐ Star this repo](https://github.com/maternion/MatOllama) if MatOllama enhances your AI workflow!
 
