@@ -9,6 +9,7 @@ Professional terminal UX -  Context-aware switching -  Session persistence
 </div>
 
 ***
+<img width="1501" height="390" alt="image" src="https://github.com/user-attachments/assets/15d942b3-c61b-4d53-8c17-609a428863a1" />
 
 ## ✨ Key Features
 
