@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """
-Ollama CLI
-Version: 1.1.0
+Enhanced Ollama CLI
+Version: 1.1.1
 """
 import argparse
 import json
@@ -26,7 +26,7 @@ from prompt_toolkit import prompt
 from prompt_toolkit.history import FileHistory
 import inquirer
 
-CLI_VERSION = "1.1.0"
+CLI_VERSION = "1.1.1"
 
 console = Console(highlight=False)
 
@@ -60,6 +60,16 @@ class OllamaClient:
             return data.get("models", [])
         except Exception as e:
             console.print(f"[red]Error fetching models: {e}[/red]")
+            return []
+
+    def get_running_models(self) -> List[Dict]:
+        """Get currently running/loaded models"""
+        try:
+            response = self._request("GET", "/api/ps")
+            data = response.json()
+            return data.get("models", [])
+        except Exception as e:
+            console.print(f"[yellow]Warning: Could not fetch running models: {e}[/yellow]")
             return []
 
     def pull_model(self, name: str) -> bool:
@@ -394,10 +404,10 @@ class CLI:
         self.sessions_dir.mkdir(exist_ok=True)
         self.exports_dir.mkdir(exist_ok=True)
         
-        # Load configuration (including theme color)
+        # Load configuration
         self._load_config()
         
-        # Setup prompt_toolkit history (FIXED: no autocomplete)
+        # Setup prompt_toolkit history
         self.history_file = FileHistory(str(self.base_dir / ".ollama_history"))
         
         signal.signal(signal.SIGINT, self._signal_handler)
@@ -470,7 +480,6 @@ class CLI:
             
         print()
         try:
-            # FIXED: Removed AutoSuggestFromHistory() to fix autocomplete issues
             return prompt(
                 self._get_prompt(),
                 history=self.history_file
@@ -562,6 +571,7 @@ class CLI:
                         return True
             
             if selected_model:
+                # Context-aware switching
                 if self.history:
                     context_prompt = "Previous conversation context:\n\n"
                     for msg in self.history:
@@ -574,6 +584,18 @@ class CLI:
                 self.current_model = selected_model
                 console.print(f"[green]✓ Switched to:[/green] [{self.theme_color}]{selected_model}[/{self.theme_color}]")
                 console.print("[dim]Continue chatting with the new model...[/dim]")
+
+        elif command == "/unload":
+            if self.current_model:
+                console.print(f"[yellow]Unloading {self.current_model} and exiting chat mode...[/yellow]")
+                self.api.unload_model(self.current_model)
+                self.current_model = None
+                self.history.clear()
+                console.print("[green]✓ Model unloaded, exited chat mode[/green]")
+                return "EXIT"
+            else:
+                console.print("[yellow]No model currently loaded[/yellow]")
+                return "EXIT"
 
         elif command == "/exit":
             self.current_model = None
@@ -604,21 +626,13 @@ class CLI:
             return 80
 
     def _calculate_optimal_width(self) -> int:
-        """FIXED: Simple width calculation that works reliably"""
-        models = self.api.list_models()
-        terminal_width = self._get_terminal_width()
-        
-        min_width = 60
-        max_width = 120
-        
-        if not models:
-            return min(80, terminal_width - 2)
-        
-        # Simple approach: use terminal width if reasonable, otherwise default
-        if terminal_width >= min_width and terminal_width <= max_width:
-            return terminal_width - 2
-        else:
-            return min_width
+        """Better responsive width calculation"""
+        try:
+            terminal_width = self._get_terminal_width()
+            optimal_width = max(60, min(terminal_width - 4, 150))
+            return optimal_width
+        except:
+            return 80
 
     def cmd_list_boxwidth(self, width=None, interactive=False):
         models = self.api.list_models()
@@ -635,12 +649,25 @@ class CLI:
 
         table = Table(title="Available Models", box=box.ROUNDED, border_style=self.theme_color, width=width)
         
-        # FIXED: Restore proper columns with serial numbers
-        table.add_column("#", style=self.theme_color, width=3, max_width=3)
-        table.add_column("Name")
-        table.add_column("ID", width=12, max_width=12)
-        table.add_column("Size", width=10, max_width=10)
-        table.add_column("Modified", width=16, max_width=16)
+        # Responsive columns based on terminal width
+        if width < 90:
+            # Narrow layout
+            table.add_column("#", style=self.theme_color, width=2)
+            table.add_column("Name", min_width=20)
+            table.add_column("Size", width=8)
+        elif width < 130:
+            # Medium layout
+            table.add_column("#", style=self.theme_color, width=3)
+            table.add_column("Name", min_width=25)
+            table.add_column("ID", width=12)
+            table.add_column("Size", width=10)
+        else:
+            # Full layout
+            table.add_column("#", style=self.theme_color, width=3)
+            table.add_column("Name", min_width=30)
+            table.add_column("ID", width=12)
+            table.add_column("Size", width=10)
+            table.add_column("Modified", width=16)
 
         for i, m in enumerate(models, 1):
             model_id = (m.get("digest") or "-")[:12]
@@ -657,8 +684,13 @@ class CLI:
             if name == self.current_model:
                 name = f"→ {name}"
             
-            # FIXED: Add serial numbers back
-            table.add_row(str(i), name, model_id, size, modified)
+            # Add rows based on layout
+            if width < 90:
+                table.add_row(str(i), name, size)
+            elif width < 130:
+                table.add_row(str(i), name, model_id, size)
+            else:
+                table.add_row(str(i), name, model_id, size, modified)
 
         console.print(table)
         
@@ -694,6 +726,7 @@ class CLI:
     def cmd_rm(self, args: List[str]):
         if not args:
             console.print("Usage: rm <model|number>")
+            console.print("[dim]💡 Tip: Model numbers change after each deletion[/dim]")
             self.cmd_list()
             return
         
@@ -715,24 +748,38 @@ class CLI:
                 console.print(f"[red]Invalid model number. Please choose 1-{len(available_models)}[/red]")
                 return
         except ValueError:
+            # It's a model name, not a number
             model_names = [m["name"] for m in available_models]
             if model_arg in model_names:
                 selected_model = model_arg
+                console.print(f"[yellow]Selected model:[/yellow] [red]{selected_model}[/red]")
             else:
                 console.print(f"Model '{model_arg}' not found locally")
                 return
+        
+        # Always unload before deleting to ensure proper removal
+        if self.current_model == selected_model:
+            console.print(f"[yellow]Unloading currently active model: {selected_model}[/yellow]")
+            self.cmd_unload()
+        else:
+            # Check if model is running and unload it
+            running_models = self.api.get_running_models()
+            for running_model in running_models:
+                if running_model.get("name") == selected_model:
+                    console.print(f"[yellow]Unloading running model: {selected_model}[/yellow]")
+                    self.api.unload_model(selected_model)
+                    break
         
         if not Confirm.ask(f"[red]Are you sure you want to delete '{selected_model}'?[/red]"):
             console.print("Deletion cancelled")
             return
         
-        if self.current_model == selected_model:
-            console.print(f"[yellow]Unloading currently active model: {selected_model}[/yellow]")
-            self.cmd_unload()
-        
         console.print(f"[red]Deleting {selected_model}...[/red]")
         if self.api.delete_model(selected_model):
             console.print(f"[green]Successfully deleted {selected_model}[/green]")
+            # Show updated list after deletion
+            console.print("\n[dim]Updated model list:[/dim]")
+            self.cmd_list()
         else:
             console.print(f"[red]Failed to delete {selected_model}[/red]")
 
@@ -918,9 +965,7 @@ class CLI:
 
     def cmd_ps(self):
         try:
-            response = self.api._request("GET", "/api/ps")
-            data = response.json()
-            running_models = data.get("models", [])
+            running_models = self.api.get_running_models()
             
             if not running_models:
                 console.print("[dim]No models currently running[/dim]")
@@ -929,10 +974,14 @@ class CLI:
             optimal_width = self._calculate_optimal_width()
             table = Table(title="Running Models", box=box.ROUNDED, border_style=self.theme_color, width=optimal_width)
             
-            table.add_column("Name", style=self.theme_color)
-            table.add_column("Size", width=10, max_width=10)
-            table.add_column("Processor", width=12, max_width=12)
-            table.add_column("Until", width=20, max_width=20)
+            if optimal_width < 100:
+                table.add_column("Name", style=self.theme_color, min_width=20)
+                table.add_column("Size", width=10)
+            else:
+                table.add_column("Name", style=self.theme_color, min_width=25)
+                table.add_column("Size", width=10)
+                table.add_column("Processor", width=12)
+                table.add_column("Until", width=20)
             
             for model in running_models:
                 name = model.get("name", "Unknown")
@@ -953,7 +1002,10 @@ class CLI:
                     except:
                         until = until[:16]
                 
-                table.add_row(name, size, processor, until)
+                if optimal_width < 100:
+                    table.add_row(name, size)
+                else:
+                    table.add_row(name, size, processor, until)
             
             console.print(table)
             
@@ -970,12 +1022,12 @@ class CLI:
 [bold {self.theme_color}]CLI Version:[/bold {self.theme_color}] {CLI_VERSION}
 [bold green]Ollama Version:[/bold green] {ollama_version}
 
-[dim]Enhanced Ollama CLI with:
+[dim]Enhanced features:
 • Context-aware model switching
 • Persistent themes & settings  
 • Conversation export (JSON/text)
 • Dynamic model list display
-• Professional terminal UI[/dim]"""
+• Rich terminal interface[/dim]"""
         
         console.print(Panel(
             version_content,
@@ -1140,10 +1192,21 @@ class CLI:
                     console.print(f"[red]Model '{identifier}' not found locally[/red]")
                     return
         else:
-            if self.current_model:
+            running_models = self.api.get_running_models()
+            if running_models:
+                if len(running_models) == 1:
+                    model_to_unload = running_models[0]["name"]
+                    console.print(f"[yellow]Found running model: {model_to_unload}[/yellow]")
+                else:
+                    console.print("[yellow]Multiple models running:[/yellow]")
+                    for i, model in enumerate(running_models, 1):
+                        console.print(f"  {i}. {model['name']}")
+                    console.print("Use 'unload <model|number>' to specify which one")
+                    return
+            elif self.current_model:
                 model_to_unload = self.current_model
             else:
-                console.print("[yellow]No model currently loaded to unload[/yellow]")
+                console.print("[yellow]No models currently running or loaded[/yellow]")
                 return
         
         console.print(f"[yellow]Unloading {model_to_unload}...[/yellow]")
@@ -1366,43 +1429,53 @@ class CLI:
     def cmd_help(self):
         optimal_width = self._calculate_optimal_width()
         help_text = f"""Commands:
-list                  - List available models
-select                - Interactive model selection  
+list, ls              - List available models with numbers
+select                - Interactive model selection with arrow keys
+pull <model>          - Download model
 run <model|number>    - Run model by name or number
 show <model>          - Show model info
-rm <model|number>     - Remove model
-rename <old> <new>    - Rename model (copy and delete original)
+rm <model|number>     - Remove/delete model
 copy <src> <dest>     - Copy model with new name
+rename <old> <new>    - Rename model (copy and delete original)
 create <name> [file]  - Create model from Modelfile
 push <model|number>   - Push model to registry
-ps                    - Show running models
-unload [model|number] - Unload model
+ps                    - Show detailed running models info
+unload [model|number] - Unload model (current if no arg)
+export [format] [file]- Export conversation (saves to Exports/)
+theme [color]         - Set theme color (persistent)
+version               - Show CLI and Ollama versions
 stop                  - Stop generation
-history               - Show conversation history
+temp [value]          - Show/set temperature (persistent)
+system [prompt]       - Set/clear system prompt
+history               - Show conversation
 clear                 - Clear conversation
-export [format] [file]- Export conversation (json/text)
-theme [color]         - Set color theme (persistent)
-temp [value]          - Set temperature (persistent)
-save [file]           - Save session
-load <file>           - Load session
-version               - Show version info
+save [file]           - Save session (saves to Sessions/)
+load <file>           - Load session (loads from Sessions/)
 help                  - Show this help
-exit                  - Quit
+exit                  - Quit CLI
 
-In Chat:
-  /switch <model|number> - Switch model with context
-  /set verbose <true|false> - Toggle verbose mode
-  /set think <true|false>   - Toggle thinking mode
+In-Chat Commands:
+  /set verbose <true|false> - Enable/disable verbose mode
+  /set think <true|false>   - Enable/disable thinking mode  
+  /switch <model|number>    - Switch to different model with context
+  /unload                   - Unload current model and exit chat mode
   /exit                     - Exit chat mode
+  /help                     - Show this help
+
+Directory Structure:
+  Sessions/             - Saved chat sessions
+  Exports/              - Exported conversations  
+  config.json          - Persistent settings (theme, temp, etc.)
 
 Examples:
-  run 1
-  rename 1 mymodel  
-  export json
-  theme cyan
-  /switch 2
+  run 2                         # Run model #2 from list
+  rename 2 my-custom-model     # Rename model #2
+  export json                  # Export as JSON (auto-named)
+  theme blue                   # Set persistent theme color
+  /switch 3                    # Switch models with context in chat
+  /unload                      # Unload model and exit chat
 
-[dim]CLI Version: {CLI_VERSION} | Settings persist between sessions[/dim]
+[dim]CLI Version: {CLI_VERSION} | Enhanced Ollama interface[/dim]
 """
         console.print(Panel(help_text, title="Help", border_style=self.theme_color, box=box.ROUNDED, width=optimal_width))
 
@@ -1412,7 +1485,6 @@ Examples:
             return
 
         self.history.append(ChatMsg("user", message))
-
         messages = [{"role": m.role, "content": m.content} for m in self.history]
         
         self.streaming = True
@@ -1496,11 +1568,11 @@ Examples:
         
         banner_text = (
             f"Enhanced Ollama CLI v{CLI_VERSION}\n"
-            f"[{self.theme_color}]✓ Context-aware switching • Persistent themes • Conversation export[/{self.theme_color}]"
+            f"[{self.theme_color}]✓ Context-aware switching • Persistent config • Model management[/{self.theme_color}]"
         )
         console.print(Panel(
             banner_text,
-            title="Ollama CLI",
+            title="Enhanced Ollama CLI",
             border_style=self.theme_color,
             box=box.ROUNDED,
             width=optimal_width
@@ -1535,7 +1607,7 @@ Examples:
                             self.cmd_save("")
                         console.print("Goodbye!")
                         break
-                    elif cmd == "list":
+                    elif cmd in ["list", "ls"]:
                         self.cmd_list_boxwidth(current_width)
                     elif cmd == "select":
                         self.cmd_select()
@@ -1610,7 +1682,7 @@ def main():
         cmd = parts[0].lower()
         cmd_args = parts[1:]
 
-        if cmd == "list":
+        if cmd in ["list", "ls"]:
             cli.cmd_list()
         elif cmd == "select":
             cli.cmd_select()
