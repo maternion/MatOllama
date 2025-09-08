@@ -1,14 +1,12 @@
 # ⚡ MatOllama — Enhanced CLI for Local LLM Management
-
 **MatOllama** is a powerful, feature-rich command-line interface for managing and interacting with local large language models through Ollama. Built for developers, researchers, and AI enthusiasts who demand speed, clarity, and robust functionality in their terminal workflows.
 
 <div align="center">
-
 Professional terminal UX -  Context-aware switching -  Session persistence
-
 </div>
 
 ***
+
 <img width="1501" height="390" alt="image" src="https://github.com/user-attachments/assets/15d942b3-c61b-4d53-8c17-609a428863a1" />
 
 ## ✨ Key Features
@@ -24,6 +22,7 @@ Professional terminal UX -  Context-aware switching -  Session persistence
 - **Comprehensive Operations**: Pull, run, copy, rename, create, push, and remove models with confirmation prompts
 - **Smart Selection**: Interactive model picker with arrow key navigation
 - **Resource Control**: Unload models, monitor running processes, and manage GPU/CPU usage
+- **Intelligent Deletion**: Auto-refresh model list after deletions to prevent index confusion
 
 ### 💾 **Session & Data Management**
 - **Persistent Sessions**: Save/load conversations with metadata and version tracking
@@ -36,6 +35,7 @@ Professional terminal UX -  Context-aware switching -  Session persistence
 - **Input Blocking**: Prevents commands during long operations (model copying/renaming)
 - **Confirmation Dialogs**: Safety prompts for destructive actions
 - **Detailed Debugging**: Verbose mode for API inspection and troubleshooting
+- **Memory Management**: Automatic model unloading before deletion to prevent failures
 
 ***
 
@@ -46,7 +46,6 @@ Professional terminal UX -  Context-aware switching -  Session persistence
 - **Ollama** installed and running ([Download Ollama](https://ollama.com/download))
 
 ### Quick Install
-
 1. **Clone the repository**:
    ```bash
    git clone https://github.com/maternion/MatOllama.git
@@ -109,6 +108,7 @@ run llama3.1 "Explain quantum computing in simple terms"
 Once a model is loaded:
 - Type messages directly
 - Use `/switch 2` to change models while preserving context
+- Use `/unload` to unload current model and exit chat mode
 - Use `/exit` to leave chat mode
 - Use `stop` or Ctrl+C to halt generation
 
@@ -119,7 +119,7 @@ Once a model is loaded:
 ### Core Model Operations
 | Command | Description | Examples |
 |---------|-------------|----------|
-| `list` | Display all models with index, name, size, and modified date | `list` |
+| `list`, `ls` | Display all models with index, name, size, and modified date | `list`, `ls` |
 | `select` | Interactive model picker with arrow keys | `select` |
 | `pull <model>` | Download model from Ollama registry | `pull codellama:7b` |
 | `run <model\|#> [prompt]` | Start chat session or execute single prompt | `run 2`, `run llama3 "Hello"` |
@@ -128,7 +128,7 @@ Once a model is loaded:
 ### Model Management
 | Command | Description | Examples |
 |---------|-------------|----------|
-| `rm <model\|#>` | Remove model (with confirmation) | `rm 3`, `rm old-model` |
+| `rm <model\|#>` | Remove model (shows updated list after deletion) | `rm 3`, `rm old-model` |
 | `copy <src> <dest>` | Duplicate model with new name | `copy llama3 my-llama` |
 | `rename <old> <new>` | Rename model (copy + delete original) | `rename 1 better-name` |
 | `create <name> [file]` | Create custom model from Modelfile | `create my-bot ./Modelfile` |
@@ -158,17 +158,17 @@ Once a model is loaded:
 | `history` | Display conversation with timestamps | `history` |
 | `clear` | Clear conversation history (with confirmation) | `clear` |
 | `help` | Show comprehensive command help | `help` |
-| `exit` \| `quit` | Exit application (prompts to save) | `exit` |
+| `exit`, `quit` | Exit application (prompts to save) | `exit` |
 
 ***
 
 ## 💬 In-Chat Commands
-
 When in chat mode (after running a model):
 
 | Command | Description | Examples |
 |---------|-------------|----------|
 | `/switch <model\|#>` | **Switch models preserving context** | `/switch 2`, `/switch gpt-4o` |
+| `/unload` | **Unload current model and exit chat mode** | `/unload` |
 | `/set verbose <true\|false>` | Toggle detailed API debugging | `/set verbose true` |
 | `/set think <true\|false>` | Toggle thinking mode for reasoning models | `/set think false` |
 | `/exit` | Exit chat mode, return to command mode | `/exit` |
@@ -187,6 +187,30 @@ run llama3.1
 # Switch to specialized model while keeping context
 /switch codellama
 # Conversation history is preserved and transferred
+```
+
+### Intelligent Model Deletion
+```bash
+# Remove models with automatic list refresh
+rm 1
+# ✓ Model deleted
+# Updated model list automatically displayed
+# No more index confusion!
+
+# Also works with model names
+rm old-experimental-model
+```
+
+### Enhanced Chat Mode Control
+```bash
+# In chat mode, cleanly exit and unload
+/unload
+# ✓ Model unloaded, exited chat mode
+# Memory freed, ready for next model
+
+# Quick model switching with context
+/switch 3
+# ✓ Previous conversation transferred to new model
 ```
 
 ### Persistent Themes & Settings
@@ -302,10 +326,12 @@ export json code-examples.json
 ```bash
 # List all models with clear formatting
 list
+# or use shorthand
+ls
 
-# Clean up old models
+# Clean up old models (with auto-refresh)
 rm old-model-v1
-rm 3  # Remove by index
+rm 3  # Remove by index, shows updated list
 
 # Create production copies
 copy experimental-model production-v1
@@ -313,6 +339,10 @@ rename development-model staging-v2
 
 # Monitor system resources
 ps
+
+# Clean unload when switching contexts
+/unload  # In chat mode
+unload unused-model  # In command mode
 ```
 
 ***
@@ -339,20 +369,37 @@ ps
 # Unload unused models
 unload old-model
 
+# Clean exit from chat with unload
+/unload  # Frees memory and exits chat
+
 # Monitor during operations
 run llama3 --verbose
+```
+
+### Model Deletion Issues
+```bash
+# Models not deleting? They might be loaded
+ps  # Check what's running
+unload problematic-model  # Unload first
+rm problematic-model     # Then delete
+
+# Use the auto-refresh feature
+rm 1  # Automatically shows updated list after deletion
 ```
 
 ### Display Problems
 ```bash
 # Terminal too narrow?
-# Resize terminal - tables auto-adjust
+# Resize terminal - tables auto-adjust to width
 
 # Color issues?
 theme cyan  # Try different theme
 
 # Text corruption?
 clear  # Clear terminal buffer
+
+# Table formatting issues?
+ls  # New responsive tables adapt to terminal size
 ```
 
 ### Model Issues
@@ -365,8 +412,9 @@ rm problematic-model
 pull problematic-model  # Re-download
 
 # Out of memory?
-unload  # Free current model
-ps      # Check what's running
+/unload  # In chat mode - frees memory and exits
+unload   # In command mode
+ps       # Check what's running
 ```
 
 ***
@@ -374,21 +422,30 @@ ps      # Check what's running
 ## 🎯 Tips & Best Practices
 
 ### Performance
-- Use `unload` between different models to free memory
+- Use `/unload` in chat mode to cleanly free memory and exit
+- Use `unload` command to free specific models from memory
 - Monitor with `ps` to track resource usage
 - Set appropriate `temp` values (0.7 default, 0.3 for factual, 1.2 for creative)
 
 ### Workflow
 - Use `select` for visual model picking
+- Use `ls` as shorthand for `list` command
 - Save important sessions before switching models
+- Use `/unload` instead of `/exit` when you want to free model memory
 - Export conversations regularly for backup
 - Use `/switch` to compare model responses on same topic
+
+### Model Management
+- The `rm` command now shows updated model list automatically
+- Delete by name to avoid index confusion: `rm old-model-name`
+- Always check `ps` to see what's actually running
+- Use `/unload` in chat mode for clean memory management
 
 ### Organization
 - Use descriptive names when saving sessions
 - Export training conversations as JSON
 - Keep Sessions/ organized by date or topic
-- Regular cleanup of old exports and models
+- Regular cleanup of old exports and models using improved `rm` command
 
 ***
 
