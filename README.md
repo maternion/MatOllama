@@ -1,4 +1,4 @@
-# ⚡ MatOllama — Enhanced CLI for Local LLM Management
+# ⚡ MatOllama — Enhanced CLI for Local LLM
 **MatOllama** is a powerful, feature-rich command-line interface for managing and interacting with local large language models through Ollama. Built for developers, researchers, and AI enthusiasts who demand speed, clarity, and robust functionality in their terminal workflows.
 
 <div align="center">
