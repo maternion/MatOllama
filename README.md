@@ -13,6 +13,7 @@ Professional terminal UX -  Context-aware switching -  Session persistence
 
 ### 🎯 **Professional Terminal Experience**
 - **Rich UI Components**: Beautiful tables, panels, progress bars, and color-coded output
+- **Concurrent Operations**: Multi-layer progress bars for model downloads/uploads with real-time speed & ETA
 - **Adaptive Layouts**: Dynamic table widths that adjust to terminal size and content length
 - **Real-time Feedback**: Streaming chat responses with first-token responsiveness
 - **Intelligent Display**: Handles "thinking" models with dimmed reasoning steps
@@ -23,6 +24,7 @@ Professional terminal UX -  Context-aware switching -  Session persistence
 - **Smart Selection**: Interactive model picker with arrow key navigation
 - **Resource Control**: Unload models, monitor running processes, and manage GPU/CPU usage
 - **Intelligent Deletion**: Auto-refresh model list after deletions to prevent index confusion
+- **Native Pass-through**: Automatically passes unknown commands (like `signin`) to the official Ollama binary
 
 ### 💾 **Session & Data Management**
 - **Persistent Sessions**: Save/load conversations with metadata and version tracking
@@ -31,10 +33,10 @@ Professional terminal UX -  Context-aware switching -  Session persistence
 - **Theme Persistence**: Customizable color themes that survive restarts
 
 ### 🛡️ **Robust Error Handling**
+- **Auto-Bootstrapping**: Automatically manages virtual environments and installs dependencies
 - **Graceful Interruption**: Ctrl+C handling with context-aware responses
 - **Input Blocking**: Prevents commands during long operations (model copying/renaming)
 - **Confirmation Dialogs**: Safety prompts for destructive actions
-- **Detailed Debugging**: Verbose mode for API inspection and troubleshooting
 - **Memory Management**: Automatic model unloading before deletion to prevent failures
 
 ***
@@ -52,29 +54,14 @@ Professional terminal UX -  Context-aware switching -  Session persistence
    cd MatOllama
    ```
 
-2. **Install dependencies**:
+2. **Run MatOllama**:
    ```bash
-   pip install -r requirements.txt
-   ```
-
-3. **Run MatOllama**:
-   ```bash
-   python3 MatOllama.py
-   ```
-
-4. **Optional: Make executable**:
-   ```bash
-   chmod +x MatOllama.py
+   # The script is a self-contained installer. 
+   # It will automatically create a venv, install dependencies, and run.
    ./MatOllama.py
    ```
 
-### Dependencies (`requirements.txt`)
-```txt
-requests==2.31.0
-rich==13.7.1
-prompt-toolkit==3.0.43
-inquirer==3.2.4
-```
+   *Note: Ensure the script is executable (`chmod +x MatOllama.py`)*
 
 ***
 
@@ -92,7 +79,7 @@ ollama serve
 
 ### 3. **Pull and Run Your First Model**
 ```bash
-# Pull a model
+# Pull a model (now with concurrent download bars!)
 pull llama3.1
 
 # Run by name or index
@@ -121,7 +108,7 @@ Once a model is loaded:
 |---------|-------------|----------|
 | `list`, `ls` | Display all models with index, name, size, and modified date | `list`, `ls` |
 | `select` | Interactive model picker with arrow keys | `select` |
-| `pull <model>` | Download model from Ollama registry | `pull codellama:7b` |
+| `pull <model>` | Download model from Ollama registry (multi-layer progress) | `pull codellama:7b` |
 | `run <model\|#> [prompt]` | Start chat session or execute single prompt | `run 2`, `run llama3 "Hello"` |
 | `show <model>` | Display detailed model information | `show llama3.1` |
 
@@ -132,7 +119,7 @@ Once a model is loaded:
 | `copy <src> <dest>` | Duplicate model with new name | `copy llama3 my-llama` |
 | `rename <old> <new>` | Rename model (copy + delete original) | `rename 1 better-name` |
 | `create <name> [file]` | Create custom model from Modelfile | `create my-bot ./Modelfile` |
-| `push <model\|#>` | Upload model to registry (requires auth) | `push my-model` |
+| `push <model\|#>` | Upload model to registry (multi-layer progress) | `push my-model` |
 
 ### System & Control
 | Command | Description | Examples |
@@ -141,6 +128,7 @@ Once a model is loaded:
 | `unload [model\|#]` | Free model from memory | `unload`, `unload 2` |
 | `stop` | Halt active generation | `stop` |
 | `version` | Display CLI and Ollama version info | `version` |
+| `*` | Unknown commands passed to Ollama binary | `signin`, `cp` |
 
 ### Session & Configuration
 | Command | Description | Examples |
@@ -266,8 +254,7 @@ Options:
 MatOllama creates organized directories:
 ```
 MatOllama/
-├── MatOllama.py          # Main script
-├── requirements.txt      # Dependencies
+├── MatOllama.py          # Main script (Self-contained installer)
 ├── config.json          # Persistent settings
 ├── Sessions/            # Saved chat sessions
 ├── Exports/             # Exported conversations
