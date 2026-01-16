@@ -80,15 +80,15 @@ ollama serve
 ### 3. **Pull and Run Your First Model**
 ```bash
 # Pull a model (now with concurrent download bars!)
-pull llama3.1
+pull qwen3
 
 # Run by name or index
-run llama3.1
+run qwen3
 # or
 run 1
 
 # One-shot prompt
-run llama3.1 "Explain quantum computing in simple terms"
+run qwen3 "Explain quantum computing in simple terms"
 ```
 
 ### 4. **Interactive Chat**
@@ -109,14 +109,14 @@ Once a model is loaded:
 | `list`, `ls` | Display all models with index, name, size, and modified date | `list`, `ls` |
 | `select` | Interactive model picker with arrow keys | `select` |
 | `pull <model>` | Download model from Ollama registry (multi-layer progress) | `pull codellama:7b` |
-| `run <model\|#> [prompt]` | Start chat session or execute single prompt | `run 2`, `run llama3 "Hello"` |
-| `show <model>` | Display detailed model information | `show llama3.1` |
+| `run <model\|#> [prompt]` | Start chat session or execute single prompt | `run 2`, `run gpt-oss:20b "Hello"` |
+| `show <model>` | Display detailed model information | `show qwen3:4b` |
 
 ### Model Management
 | Command | Description | Examples |
 |---------|-------------|----------|
 | `rm <model\|#>` | Remove model (shows updated list after deletion) | `rm 3`, `rm old-model` |
-| `copy <src> <dest>` | Duplicate model with new name | `copy llama3 my-llama` |
+| `copy <src> <dest>` | Duplicate model with new name | `copy llama3.1 my-llama` |
 | `rename <old> <new>` | Rename model (copy + delete original) | `rename 1 better-name` |
 | `create <name> [file]` | Create custom model from Modelfile | `create my-bot ./Modelfile` |
 | `push <model\|#>` | Upload model to registry (multi-layer progress) | `push my-model` |
@@ -169,11 +169,11 @@ When in chat mode (after running a model):
 ### Context-Aware Model Switching
 ```bash
 # Start conversation with one model
-run llama3.1
+run qwen3:30b
 > "Let's discuss machine learning basics"
 
 # Switch to specialized model while keeping context
-/switch codellama
+/switch qwen3-coder:30b
 # Conversation history is preserved and transferred
 ```
 
