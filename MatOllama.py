@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """
 Enhanced Ollama CLI
-Version: 1.1.1
+Version: 1.2.0
 """
 import argparse
 import json
@@ -9,10 +9,107 @@ import os
 import sys
 import signal
 import time
+import subprocess
+import shutil
+import importlib.util
 from dataclasses import dataclass, field
 from datetime import datetime
 from typing import Generator, List, Dict, Optional
 from pathlib import Path
+
+# Dependency Management & Auto-bootstrapping
+REQUIRED_PACKAGES = [
+    "requests>=2.31.0",
+    "rich>=13.7.1",
+    "prompt_toolkit>=3.0.43",
+    "inquirer>=3.2.4"
+]
+
+def ensure_environment():
+    """
+    Ensures the script runs with required dependencies in a dedicated venv.
+    1. Checks if running in the local .venv.
+    2. If not, creates it (using uv if available) and restarts.
+    3. Installs missing dependencies (using uv if available).
+    """
+    base_dir = Path(__file__).parent.absolute()
+    venv_dir = base_dir / ".venv"
+    
+    # Determine expected python executable in venv
+    if sys.platform == "win32":
+        venv_python = venv_dir / "Scripts" / "python.exe"
+    else:
+        venv_python = venv_dir / "bin" / "python"
+
+    # 1. Check if we are running in the correct venv
+    try:
+        # Resolve paths to handle symlinks/absolute paths correctness
+        is_in_venv = Path(sys.executable).resolve() == venv_python.resolve()
+    except (OSError, RuntimeError):
+        is_in_venv = False
+    
+    if not is_in_venv:
+        # We are NOT in the venv, so we need to switch to it
+        if not venv_dir.exists():
+            print(f"Creating virtual environment in {venv_dir}...")
+            # Try to use uv for faster venv creation
+            if shutil.which("uv"):
+                try:
+                    subprocess.check_call(["uv", "venv", str(venv_dir)])
+                except subprocess.CalledProcessError:
+                    # Fallback if uv fails for some reason
+                    subprocess.check_call([sys.executable, "-m", "venv", str(venv_dir)])
+            else:
+                subprocess.check_call([sys.executable, "-m", "venv", str(venv_dir)])
+        
+        if not venv_python.exists():
+            print(f"Error: Virtual environment python not found at {venv_python}")
+            sys.exit(1)
+
+        # Restart script using the venv python
+        # This effectively "activates" the venv for the process
+        try:
+            os.execv(str(venv_python), [str(venv_python)] + sys.argv)
+        except OSError as e:
+            print(f"Error switching to venv: {e}")
+            sys.exit(1)
+
+    # 2. We are NOW in the venv. Check and install dependencies.
+    pkg_map = {
+        "requests": "requests",
+        "rich": "rich",
+        "prompt_toolkit": "prompt_toolkit",
+        "inquirer": "inquirer"
+    }
+    
+    missing = []
+    for req in REQUIRED_PACKAGES:
+        # Parse package name from requirement string (e.g., "requests>=2.0" -> "requests")
+        pkg_name = req.split(">=")[0].split("==")[0].split("<")[0].strip()
+        import_name = pkg_map.get(pkg_name, pkg_name)
+        
+        if importlib.util.find_spec(import_name) is None:
+            missing.append(req)
+    
+    if missing:
+        print(f"Installing missing dependencies: {', '.join(missing)}")
+        
+        # Try to use uv for faster installation
+        if shutil.which("uv"):
+            try:
+                # Explicitly point uv to the current python environment to be safe
+                subprocess.check_call(["uv", "pip", "install", "--python", sys.executable] + missing)
+            except subprocess.CalledProcessError:
+                subprocess.check_call([sys.executable, "-m", "pip", "install"] + missing)
+        else:
+            subprocess.check_call([sys.executable, "-m", "pip", "install"] + missing)
+            
+        print("Dependencies installed successfully. Restarting...")
+        os.execv(sys.executable, [sys.executable] + sys.argv)
+
+# Run check before importing external libs
+ensure_environment()
+
 import requests
 from requests.exceptions import RequestException
 from rich.console import Console
@@ -21,12 +118,15 @@ from rich.prompt import Confirm, IntPrompt
 from rich.text import Text
 from rich import box
 from rich.panel import Panel
-from rich.progress import Progress, SpinnerColumn, TextColumn
+from rich.progress import (
+    Progress, SpinnerColumn, TextColumn, BarColumn, 
+    DownloadColumn, TransferSpeedColumn, TimeRemainingColumn
+)
 from prompt_toolkit import prompt
 from prompt_toolkit.history import FileHistory
 import inquirer
 
-CLI_VERSION = "1.1.1"
+CLI_VERSION = "1.2.0"
 
 console = Console(highlight=False)
 
@@ -80,14 +180,16 @@ class OllamaClient:
             with Progress(
                 SpinnerColumn(),
                 TextColumn("[progress.description]{task.description}"),
-                TextColumn("•"),
-                TextColumn("{task.fields[status]}", style="cyan"),
+                BarColumn(),
+                DownloadColumn(),
+                TransferSpeedColumn(),
+                TimeRemainingColumn(),
                 console=console,
                 transient=False
             ) as progress:
-                task = progress.add_task(f"Pulling {name}", status="Starting...")
-                
+                tasks = {}
                 completed = False
+                
                 for line in r.iter_lines():
                     if not line:
                         continue
@@ -95,37 +197,44 @@ class OllamaClient:
                     try:
                         data = json.loads(line.decode("utf-8"))
                         status = data.get('status', 'Unknown')
+                        digest = data.get('digest', '')
                         
-                        if status == 'pulling manifest':
-                            progress.update(task, status="📋 Pulling manifest...")
-                        elif status == 'downloading':
-                            if 'completed' in data and 'total' in data:
-                                completed_bytes = data['completed']
-                                total_bytes = data['total']
-                                percent = (completed_bytes / total_bytes) * 100 if total_bytes > 0 else 0
-                                completed_mb = completed_bytes / (1024*1024)
-                                total_mb = total_bytes / (1024*1024)
-                                progress.update(task, status=f"⬇️ {completed_mb:.1f}/{total_mb:.1f}MB ({percent:.1f}%)")
-                            else:
-                                progress.update(task, status="⬇️ Downloading...")
-                        elif status == 'verifying sha256 digest':
-                            progress.update(task, status="🔍 Verifying...")
-                        elif status == 'writing manifest':
-                            progress.update(task, status="📝 Writing manifest...")
-                        elif status == 'removing any unused layers':
-                            progress.update(task, status="🧹 Cleaning up...")
-                        elif status == 'success':
-                            progress.update(task, status="✅ Complete!")
-                            completed = True
-                            time.sleep(0.5)
-                            break
-                        elif 'error' in data:
+                        if 'error' in data:
                             error_msg = data.get('error', 'Unknown error')
-                            progress.update(task, status=f"❌ Error: {error_msg}")
                             console.print(f"[red]Pull failed: {error_msg}[/red]")
                             return False
+
+                        if status == 'success':
+                            completed = True
+                            # Wait a brief moment for bars to complete visually if needed
+                            time.sleep(0.1)
+                            break
+                            
+                        if digest:
+                            # Shorten digest for display
+                            digest_short = digest[7:19] if digest.startswith('sha256:') else digest[:12]
+                            
+                            if digest not in tasks:
+                                total = data.get('total', 0)
+                                tasks[digest] = progress.add_task(
+                                    f"[cyan]{status}[/cyan] {digest_short}", 
+                                    total=total, 
+                                    start=False
+                                )
+                                progress.start_task(tasks[digest])
+                            
+                            current_total = data.get('total')
+                            completed_bytes = data.get('completed', 0)
+                            
+                            if current_total:
+                                progress.update(tasks[digest], total=current_total)
+                            
+                            progress.update(tasks[digest], completed=completed_bytes, description=f"[cyan]{status}[/cyan] {digest_short}")
                         else:
-                            progress.update(task, status=status)
+                            # Status updates without digest (e.g. "pulling manifest", "verifying sha256 digest")
+                            # We print these as transient logs or just let them pass if they are generic
+                            if status in ['pulling manifest', 'verifying sha256 digest', 'writing manifest', 'removing any unused layers']:
+                                console.print(f"[dim]{status}...[/dim]")
                             
                     except json.JSONDecodeError:
                         continue
@@ -133,6 +242,8 @@ class OllamaClient:
                         console.print(f"[yellow]Progress parse error: {e}[/yellow]")
                         continue
                         
+                if completed:
+                    console.print(f"[green]✓ Successfully pulled {name}[/green]")
                 return completed
                 
         except Exception as e:
@@ -209,14 +320,16 @@ class OllamaClient:
             with Progress(
                 SpinnerColumn(),
                 TextColumn("[progress.description]{task.description}"),
-                TextColumn("•"),
-                TextColumn("{task.fields[status]}", style="cyan"),
+                BarColumn(),
+                DownloadColumn(),  # Shows size/total
+                TransferSpeedColumn(),
+                TimeRemainingColumn(),
                 console=console,
                 transient=False
             ) as progress:
-                task = progress.add_task(f"Pushing {name}", status="Starting...")
-                
+                tasks = {}
                 completed = False
+                
                 for line in r.iter_lines():
                     if not line:
                         continue
@@ -224,25 +337,51 @@ class OllamaClient:
                     try:
                         data = json.loads(line.decode("utf-8"))
                         status = data.get('status', 'Unknown')
+                        digest = data.get('digest', '')
                         
                         if 'error' in data:
                             error_msg = data.get('error', 'Unknown error')
-                            progress.update(task, status=f"❌ Error: {error_msg}")
                             console.print(f"[red]Push failed: {error_msg}[/red]")
                             return False
-                        elif status == 'success':
-                            progress.update(task, status="✅ Complete!")
+
+                        if status == 'success':
                             completed = True
-                            time.sleep(0.5)
+                            time.sleep(0.1)
                             break
-                        elif 'pushing' in status:
-                            progress.update(task, status=f"⬆️ {status}")
+                            
+                        if digest:
+                            # Shorten digest for display
+                            digest_short = digest[7:19] if digest.startswith('sha256:') else digest[:12]
+                            
+                            if digest not in tasks:
+                                total = data.get('total', 0)
+                                tasks[digest] = progress.add_task(
+                                    f"[cyan]{status}[/cyan] {digest_short}", 
+                                    total=total, 
+                                    start=False
+                                )
+                                progress.start_task(tasks[digest])
+                            
+                            current_total = data.get('total')
+                            completed_bytes = data.get('completed', 0)
+                            
+                            if current_total:
+                                progress.update(tasks[digest], total=current_total)
+                                
+                            progress.update(tasks[digest], completed=completed_bytes, description=f"[cyan]{status}[/cyan] {digest_short}")
                         else:
-                            progress.update(task, status=f"📤 {status}")
+                            # Generic status updates
+                            if status in ['pushing manifest']:
+                                console.print(f"[dim]{status}...[/dim]")
                             
                     except json.JSONDecodeError:
                         continue
+                    except Exception as e:
+                        console.print(f"[yellow]Progress parse error: {e}[/yellow]")
+                        continue
                         
+                if completed:
+                    console.print(f"[green]✓ Successfully pushed {name}[/green]")
                 return completed
                 
         except Exception as e:
@@ -609,6 +748,26 @@ class CLI:
             console.print(f"Unknown command: {command}")
         
         return True
+
+    def _run_raw_ollama(self, cmd: str, args: List[str]) -> bool:
+        """Execute a raw ollama command if it exists"""
+        if not shutil.which("ollama"):
+            console.print("[red]Error: 'ollama' executable not found in PATH[/red]")
+            return False
+
+        full_cmd = ["ollama", cmd] + args
+        
+        try:
+            # Use subprocess to run the command directly, allowing it to handle its own I/O
+            # This supports interactive commands like 'signin'
+            result = subprocess.run(full_cmd)
+            return result.returncode == 0
+        except KeyboardInterrupt:
+            console.print("\n[yellow]Command interrupted[/yellow]")
+            return False
+        except Exception as e:
+            console.print(f"[red]Failed to run ollama command: {e}[/red]")
+            return False
 
     def _format_size(self, size_bytes: int) -> str:
         if size_bytes == 0:
@@ -1431,16 +1590,16 @@ class CLI:
         help_text = f"""Commands:
 list, ls              - List available models with numbers
 select                - Interactive model selection with arrow keys
-pull <model>          - Download model
+pull <model>          - Download model (enhanced multi-layer progress)
 run <model|number>    - Run model by name or number
 show <model>          - Show model info
 rm <model|number>     - Remove/delete model
 copy <src> <dest>     - Copy model with new name
 rename <old> <new>    - Rename model (copy and delete original)
 create <name> [file]  - Create model from Modelfile
-push <model|number>   - Push model to registry
+push <model|number>   - Push model to registry (enhanced multi-layer progress)
 ps                    - Show detailed running models info
-unload [model|number] - Unload model (current if no arg)
+unload [model|number] - Unload model (Ollama 'stop' equivalent)
 export [format] [file]- Export conversation (saves to Exports/)
 theme [color]         - Set theme color (persistent)
 version               - Show CLI and Ollama versions
@@ -1454,6 +1613,8 @@ load <file>           - Load session (loads from Sessions/)
 help                  - Show this help
 exit                  - Quit CLI
 
+[dim]Note: Unknown commands (like 'signin') are automatically passed to Ollama.[/dim]
+
 In-Chat Commands:
   /set verbose <true|false> - Enable/disable verbose mode
   /set think <true|false>   - Enable/disable thinking mode  
@@ -1466,6 +1627,12 @@ Directory Structure:
   Sessions/             - Saved chat sessions
   Exports/              - Exported conversations  
   config.json          - Persistent settings (theme, temp, etc.)
+
+Features:
+  • Multi-layer progress tracking for pull/push (speed, ETA, sizes)
+  • Automatic dependency & virtual environment management
+  • Context-aware model switching in chat
+  • Native pass-through for official Ollama commands
 
 Examples:
   run 2                         # Run model #2 from list
@@ -1654,8 +1821,10 @@ Examples:
                     elif cmd == "help":
                         self.cmd_help()
                     else:
-                        console.print(f"Unknown command: {cmd}")
-                        console.print("Type 'help' for commands or 'select' to choose a model")
+                        # Try to run as raw ollama command
+                        if not self._run_raw_ollama(cmd, args):
+                            console.print(f"Unknown command: {cmd}")
+                            console.print("Type 'help' for commands or 'select' to choose a model")
 
             except KeyboardInterrupt:
                 console.print("\nGoodbye!")
@@ -1712,10 +1881,15 @@ def main():
             cli.cmd_unload(cmd_args)
         elif cmd == "version":
             cli.cmd_version()
+        elif cmd == "help":
+            cli.cmd_help()
         else:
-            console.print(f"Unknown command: {cmd}")
+            # Try to run as raw ollama command
+            if not cli._run_raw_ollama(cmd, cmd_args):
+                console.print(f"Unknown command: {cmd}")
     else:
         cli.run()
 
 if __name__ == "__main__":
     main()
+
